@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: toadbiz
+    env: python
+    buildCommand: pip install -r ToadBusiness/requirements.txt
+    startCommand: cd ToadBusiness && python server.py

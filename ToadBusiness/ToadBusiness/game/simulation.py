@@ -103,12 +103,6 @@ class MarketEngine:
         self.last_tick = time.time()
         self.next_event_at = self.last_tick + random.uniform(18.0, 36.0)
         self._dirty = False
-        # Faction territory tracking (lightweight: just % control per faction)
-        self.faction_territories = {
-            "toad": 0.15, "frog": 0.15, "bug": 0.15,
-            "lizard": 0.15, "bird": 0.15, "fox": 0.15, "shark": 0.10,
-        }
-        self.last_faction_update = self.last_tick
         self.ensure_business_stocks()
 
     @property
@@ -147,12 +141,7 @@ class MarketEngine:
         player.color = color
         player.message_color = clean_color(raw_message_color) if raw_message_color else color
         player.chat_font = clean_font(raw_chat_font)
-        
-        # Accrue income for offline time before marking player as active
-        current_ts = time.time()
-        player.accrue_income(current_ts, self.total_hourly_income(player))
-        player.last_income_at = current_ts
-        
+        player.last_income_at = time.time()
         self.active_player_counts[key] = self.active_player_counts.get(key, 0) + 1
         return player
 
@@ -227,12 +216,6 @@ class MarketEngine:
             elif stock.direction == "down" and not stock.last_event:
                 stock.last_quip = "Sellers are backing away like the floor is sticky."
 
-        # Update faction territories periodically
-        if current_ts - self.last_faction_update >= 4.0:  # Every ~4 seconds
-            self.update_faction_territories(current_ts)
-            self.last_faction_update = current_ts
-            changed = True
-
         if current_ts >= self.next_event_at:
             self.trigger_random_event(current_ts)
             self.next_event_at = current_ts + random.uniform(22.0, 52.0)
@@ -263,23 +246,6 @@ class MarketEngine:
             if ceo["name"] == ceo_name:
                 return float(ceo["bias"])
         return 0.0
-
-    def update_faction_territories(self, current_ts: float) -> None:
-        """Lightweight faction territory update using random drift and player influence."""
-        # Simple random walk for territories to create dynamic movement
-        factions = list(self.faction_territories.keys())
-        
-        for faction in factions:
-            # Random drift (±1-3% per update, scaled by time)
-            drift = random.gauss(0, 0.015)
-            self.faction_territories[faction] = max(0.05, min(0.25, 
-                self.faction_territories[faction] + drift
-            ))
-        
-        # Normalize to sum to 1.0
-        total = sum(self.faction_territories.values())
-        for faction in factions:
-            self.faction_territories[faction] /= total
 
     def moon_multiplier(self, current_ts: float) -> float:
         cycle_seconds = 180.0
@@ -601,76 +567,14 @@ class MarketEngine:
                 return
 
         roll = random.random()
-        if roll < 0.15:
-            self.trigger_faction_event()
-        elif roll < 0.45:
+        if roll < 0.34:
             self.trigger_sector_event(positive=False)
-        elif roll < 0.70:
+        elif roll < 0.62:
             self.trigger_sector_event(positive=True)
-        elif roll < 0.85:
+        elif roll < 0.82:
             self.trigger_ceo_event()
         else:
             self.trigger_stock_event()
-
-    def trigger_faction_event(self) -> None:
-        """Generate faction war or diplomacy events."""
-        faction_names = {
-            "toad": "Toad Nation",
-            "frog": "Frog Collective",
-            "bug": "Bug Swarm",
-            "lizard": "Lizard Empire",
-            "bird": "Bird Confederation",
-            "fox": "Fox Syndicate",
-            "shark": "Shark Dominion",
-        }
-        factions = list(self.faction_territories.keys())
-        
-        is_war = random.random() < 0.55  # 55% war, 45% diplomacy
-        
-        if is_war:
-            # Random war between two neighboring factions
-            faction_a = random.choice(factions)
-            faction_b = random.choice([f for f in factions if f != faction_a])
-            name_a = faction_names[faction_a]
-            name_b = faction_names[faction_b]
-            
-            war_events = [
-                (f"<strong>{name_a} declares war on {name_b}</strong>", "territorial disputes escalate into open conflict on the frontier", -0.008, -0.008),
-                (f"<strong>Border clash: {name_a} vs {name_b}</strong>", "skirmishes reported along contested boundaries", -0.006, -0.006),
-                (f"<strong>{name_a} siege reported</strong>", f"forces surrounding {name_b} settlements in dispute", -0.010, -0.005),
-            ]
-            title, body, impact_a, impact_b = random.choice(war_events)
-            
-            # Adjust territory control based on war
-            control_a = self.faction_territories[faction_a]
-            control_b = self.faction_territories[faction_b]
-            total = control_a + control_b
-            
-            # Territory shifts slightly toward aggressor
-            shift = random.uniform(0.005, 0.015)
-            self.faction_territories[faction_a] = max(0.05, control_a + shift)
-            self.faction_territories[faction_b] = max(0.05, control_b - shift)
-            
-            # Renormalize
-            total_control = sum(self.faction_territories.values())
-            for f in factions:
-                self.faction_territories[f] /= total_control
-            
-            self.add_news(title, body, "major", impact=min(impact_a, impact_b) * 100.0)
-        else:
-            # Diplomacy: pacts, treaties, alliances
-            faction_a = random.choice(factions)
-            faction_b = random.choice([f for f in factions if f != faction_a])
-            name_a = faction_names[faction_a]
-            name_b = faction_names[faction_b]
-            
-            diplomacy_events = [
-                (f"<strong>{name_a} and {name_b} sign trade pact</strong>", "economic cooperation agreement strengthens both economies", 0.003),
-                (f"<strong>Peace treaty: {name_a}-{name_b}</strong>", "decades-long territorial dispute resolved through mediation", 0.004),
-                (f"<strong>{name_a} proposes alliance with {name_b}</strong>", "unified political bloc emerges to counter regional threats", 0.002),
-            ]
-            title, body, impact = random.choice(diplomacy_events)
-            self.add_news(title, body, "normal", impact=impact * 100.0)
 
     def trigger_sabotage_event(self, stock: Stock, pressure: float) -> None:
         events = [
@@ -929,7 +833,6 @@ class MarketEngine:
                 }
                 for item in ticker
             ],
-            "factionTerritories": self.faction_territories,
         }
 
     def player_snapshot(self, player_name: str) -> dict[str, Any]:

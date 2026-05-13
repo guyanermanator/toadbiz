@@ -176,11 +176,6 @@ class GameServer:
 
     async def process_message(self, client: ClientConnection, message: dict[str, Any]) -> None:
         message_type = message.get("type")
-        
-        # Handle keep-alive ping from client to prevent connection dropout when tabbed out
-        if message_type == "ping":
-            return
-        
         if message_type == "signalHostStart":
             lobby_id = await self.create_signal_lobby(client)
             await client.send({"type": "signalLobbyReady", "lobbyId": lobby_id})

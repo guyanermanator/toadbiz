@@ -72,9 +72,6 @@ const elements = {
   leaderboard: document.querySelector("#leaderboard"),
   lobbyPanel: document.querySelector("#lobbyPanel"),
   connectionStatus: document.querySelector("#connectionStatus"),
-  globePanel: document.querySelector("#globePanel"),
-  globeCanvas: document.querySelector("#globeCanvas"),
-  globeInfo: document.querySelector("#globeInfo"),
 };
 
 function formatMoney(value) {
@@ -178,8 +175,6 @@ function connectServer() {
     if (state.playerName) {
       sendToServerSocket(socket, { type: "join", ...profilePayload() });
     }
-    // Start heartbeat to keep connection alive even when tabbed out
-    startConnectionHeartbeat(socket);
   });
 
   socket.addEventListener("close", () => {
@@ -206,19 +201,6 @@ function sendToServerSocket(socket, payload) {
   if (socket?.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify(payload));
   }
-}
-
-function startConnectionHeartbeat(socket) {
-  // Send a heartbeat every 30 seconds to keep connection alive when tabbed out
-  const heartbeatInterval = setInterval(() => {
-    if (socket?.readyState === WebSocket.OPEN) {
-      // Send a no-op heartbeat message
-      socket.send(JSON.stringify({ type: "ping" }));
-    } else {
-      // Connection closed, stop heartbeat
-      clearInterval(heartbeatInterval);
-    }
-  }, 30000);
 }
 
 function handleMessage(message) {
@@ -659,117 +641,12 @@ function renderLobbyPanel() {
   `;
 }
 
-const FACTIONS = {
-  toad: { color: "#4a9d6f", name: "Toad" },
-  frog: { color: "#2d7a3a", name: "Frog" },
-  bug: { color: "#8b5a2b", name: "Bug" },
-  lizard: { color: "#ff6b35", name: "Lizard" },
-  bird: { color: "#ffd700", name: "Bird" },
-  fox: { color: "#d2691e", name: "Fox" },
-  shark: { color: "#0066cc", name: "Shark" },
-};
-
-let globeRotation = 0;
-let globeTerritory = {}; // factionsControl map; will be filled from market data
-
-function renderGlobe() {
-  const canvas = elements.globeCanvas;
-  if (!canvas) return;
-  const ctx = canvas.getContext("2d");
-  const w = canvas.width, h = canvas.height;
-  const centerX = w / 2, centerY = h / 2, radius = Math.min(w, h) / 2 - 10;
-
-  // Update rotation
-  globeRotation = (globeRotation + 0.5) % 360;
-
-  // Clear and draw background
-  ctx.fillStyle = "#0a0e27";
-  ctx.fillRect(0, 0, w, h);
-
-  // Draw pseudo-3D globe
-  ctx.fillStyle = "#1a2844";
-  ctx.beginPath();
-  ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = "#4a9d6f";
-  ctx.lineWidth = 2;
-  ctx.stroke();
-
-  // Draw faction territories as arcs around the globe
-  const territories = state.market?.factionTerritories || {};
-  let angle = 0;
-  Object.entries(FACTIONS).forEach(([key, faction]) => {
-    const control = territories[key] || 0.15; // default 15% each
-    const arcSize = control * Math.PI * 2;
-    
-    ctx.fillStyle = faction.color;
-    ctx.beginPath();
-    ctx.moveTo(centerX, centerY);
-    ctx.arc(centerX, centerY, radius, angle, angle + arcSize);
-    ctx.lineTo(centerX, centerY);
-    ctx.fill();
-    
-    angle += arcSize;
-  });
-
-  // Calculate moon orbit distance based on Orbital Trust (ORB) stock price
-  let moonDist = radius + 40; // default distance
-  if (state.market?.stocks) {
-    const orbStock = state.market.stocks.find(s => s.symbol === "ORB");
-    if (orbStock && orbStock.price > 0) {
-      // Price range typically 10-100, map to moon distance 30-80 pixels
-      moonDist = radius + Math.max(30, Math.min(80, orbStock.price / 2));
-    }
-  }
-
-  // Draw moon orbiting
-  const moonAngle = (globeRotation * Math.PI / 180) * 2;
-  const moonX = centerX + Math.cos(moonAngle) * moonDist;
-  const moonY = centerY + Math.sin(moonAngle) * moonDist;
-  ctx.fillStyle = "#e0e0e0";
-  ctx.beginPath();
-  ctx.arc(moonX, moonY, 8, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Draw legend
-  ctx.fillStyle = "#999";
-  ctx.font = "11px Tahoma";
-  let legendY = 10;
-  Object.entries(FACTIONS).forEach(([key, faction]) => {
-    ctx.fillStyle = faction.color;
-    ctx.fillRect(w - 100, legendY, 10, 10);
-    ctx.fillStyle = "#ccc";
-    ctx.fillText(faction.name, w - 85, legendY + 9);
-    legendY += 16;
-  });
-
-  // Update info with faction and Orbital Trust info
-  const topFaction = Object.entries(territories).sort(([,a], [,b]) => b - a)[0];
-  let infoText = topFaction ? `<strong>${FACTIONS[topFaction[0]].name}</strong> controls ${(topFaction[1] * 100).toFixed(1)}% of known territories.` : "Territories uninitialized.";
-  
-  if (state.market?.stocks) {
-    const orbStock = state.market.stocks.find(s => s.symbol === "ORB");
-    if (orbStock) {
-      infoText += `<br/><small style="color: #aaa;">Moon distance tied to ORB: $${orbStock.price.toFixed(2)}</small>`;
-    }
-  }
-  
-  elements.globeInfo.innerHTML = infoText;
-
-  // Animate continuously
-  requestAnimationFrame(renderGlobe);
-}
-
 function renderRightTab() {
   const showChat = state.rightTab === "chat";
   elements.chatLog.classList.toggle("hidden", !showChat);
   elements.chatForm.classList.toggle("hidden", !showChat);
   elements.leaderboard.classList.toggle("hidden", state.rightTab !== "leaderboard");
   elements.lobbyPanel.classList.toggle("hidden", state.rightTab !== "lobby");
-  elements.globePanel.classList.toggle("hidden", state.rightTab !== "globe");
-  if (state.rightTab === "globe") {
-    renderGlobe();
-  }
 }
 
 function showNotice(message, isError = false) {
