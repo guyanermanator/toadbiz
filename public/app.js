@@ -684,6 +684,12 @@ const FACTION_KEYS = Object.keys(FACTIONS);
 const MAP_WIDTH = 96;
 const MAP_HEIGHT = 56;
 const WATER = 255;
+const LAND_SHAPE_X = 1.0;
+const LAND_SHAPE_Y = 0.62;
+const CONQUEST_BASE_CHANCE = 0.5;
+const CONQUEST_WEIGHT_SCALE = 0.65;
+const CONQUEST_RANDOM_VARIANCE = 0.2;
+const RANDOM_RESEED_RATE = 0.0009;
 const mapState = {
   initialized: false,
   running: false,
@@ -724,7 +730,7 @@ function initializeTerritoryMap() {
       const i = y * MAP_WIDTH + x;
       const nx = (x / (MAP_WIDTH - 1)) * 2 - 1;
       const ny = (y / (MAP_HEIGHT - 1)) * 2 - 1;
-      const radial = (nx * nx) / 1.0 + (ny * ny) / 0.62;
+      const radial = (nx * nx) / LAND_SHAPE_X + (ny * ny) / LAND_SHAPE_Y;
       const coastNoise = (Math.sin(x * 0.18) + Math.cos(y * 0.21)) * 0.08;
       const isWater = radial > (0.90 + coastNoise + (Math.random() * 0.06));
       mapState.terrain[i] = isWater ? WATER : 0;
@@ -752,13 +758,15 @@ function stepTerritoryMap() {
     const current = mapState.cells[i];
     const challenger = mapState.cells[ni];
     if (challenger === WATER || current === challenger) continue;
-    const challengeBias = 0.5 + (weights[challenger] - weights[current]) * 0.65 + (Math.random() - 0.5) * 0.2;
+    const challengeBias = CONQUEST_BASE_CHANCE
+      + (weights[challenger] - weights[current]) * CONQUEST_WEIGHT_SCALE
+      + (Math.random() - 0.5) * CONQUEST_RANDOM_VARIANCE;
     if (Math.random() < clamp(challengeBias, 0.08, 0.92)) {
       mapState.cells[i] = challenger;
     }
   }
   for (let i = 0; i < mapState.cells.length; i += 1) {
-    if (mapState.terrain[i] !== WATER && Math.random() < 0.0009) {
+    if (mapState.terrain[i] !== WATER && Math.random() < RANDOM_RESEED_RATE) {
       mapState.cells[i] = pickFaction(weights);
     }
   }

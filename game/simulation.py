@@ -149,7 +149,7 @@ class MarketEngine:
         key = self.player_key(name)
         reset_requested = str(join_intent or "continue").lower() == "reset"
         if reset_requested and self.active_player_counts.get(key, 0) > 0:
-            raise ValueError("Cannot reset while this player is already connected.")
+            raise ValueError("Cannot reset: disconnect all active sessions for this player first.")
         if key not in self.players:
             self.players[key] = Player(name=name, color=color)
             self._dirty = True
@@ -621,27 +621,27 @@ class MarketEngine:
     ) -> None:
         if shares < LARGE_TRADE_THRESHOLD:
             return
-        quantity = f"{shares:,}"
+        shares_formatted = f"{shares:,}"
         total_value = money(total)
         if side == "buy":
             pnl_text = f"cash -${total_value:,.2f}"
-            title = f"Large buy: {player.name} accumulated {quantity} {stock.symbol}"
-            body = f"{player.name} bought {quantity} shares at ${price:,.2f}; {pnl_text}."
+            title = f"Large buy: {player.name} accumulated {shares_formatted} {stock.symbol}"
+            body = f"{player.name} bought {shares_formatted} shares at ${price:,.2f}; {pnl_text}."
             self.add_system_chat(
-                f"Large BUY: {player.name} bought {quantity} {stock.symbol} @ ${price:,.2f} ({pnl_text})."
+                f"Large BUY: {player.name} bought {shares_formatted} {stock.symbol} @ ${price:,.2f} ({pnl_text})."
             )
             self.add_news(title, body, "normal", stock_id=stock.id)
             return
         realized = money(realized_pnl)
         pnl_word = "gained" if realized >= 0 else "lost"
         pnl_abs = abs(realized)
-        title = f"Large sell: {player.name} unloaded {quantity} {stock.symbol}"
+        title = f"Large sell: {player.name} unloaded {shares_formatted} {stock.symbol}"
         body = (
-            f"{player.name} sold {quantity} shares at ${price:,.2f}; "
+            f"{player.name} sold {shares_formatted} shares at ${price:,.2f}; "
             f"realized {pnl_word} ${pnl_abs:,.2f} on the sale."
         )
         self.add_system_chat(
-            f"Large SELL: {player.name} sold {quantity} {stock.symbol} @ ${price:,.2f} ({pnl_word} ${pnl_abs:,.2f})."
+            f"Large SELL: {player.name} sold {shares_formatted} {stock.symbol} @ ${price:,.2f} ({pnl_word} ${pnl_abs:,.2f})."
         )
         self.add_news(title, body, "normal", stock_id=stock.id)
 
