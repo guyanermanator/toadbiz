@@ -689,6 +689,8 @@ const LAND_SHAPE_Y = 0.62;
 const CONQUEST_BASE_CHANCE = 0.5;
 const CONQUEST_WEIGHT_SCALE = 0.65;
 const CONQUEST_RANDOM_VARIANCE = 0.2;
+const MIN_CONQUEST_CHANCE = 0.08;
+const MAX_CONQUEST_CHANCE = 0.92;
 const RANDOM_RESEED_RATE = 0.0009;
 const mapState = {
   initialized: false,
@@ -708,8 +710,8 @@ function clamp(value, min, max) {
 
 function targetTerritoryWeights() {
   const source = state.market?.factionTerritories || {};
-  const defaults = 1 / FACTION_KEYS.length;
-  const values = FACTION_KEYS.map((key) => Number(source[key] ?? defaults));
+  const defaultWeight = 1 / FACTION_KEYS.length;
+  const values = FACTION_KEYS.map((key) => Number(source[key] ?? defaultWeight));
   const total = values.reduce((sum, value) => sum + Math.max(0.001, value), 0);
   return values.map((value) => Math.max(0.001, value) / total);
 }
@@ -761,7 +763,7 @@ function stepTerritoryMap() {
     const challengeBias = CONQUEST_BASE_CHANCE
       + (weights[challenger] - weights[current]) * CONQUEST_WEIGHT_SCALE
       + (Math.random() - 0.5) * CONQUEST_RANDOM_VARIANCE;
-    if (Math.random() < clamp(challengeBias, 0.08, 0.92)) {
+    if (Math.random() < clamp(challengeBias, MIN_CONQUEST_CHANCE, MAX_CONQUEST_CHANCE)) {
       mapState.cells[i] = challenger;
     }
   }

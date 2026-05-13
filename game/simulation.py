@@ -149,7 +149,7 @@ class MarketEngine:
         key = self.player_key(name)
         reset_requested = str(join_intent or "continue").lower() == "reset"
         if reset_requested and self.active_player_counts.get(key, 0) > 0:
-            raise ValueError("Cannot reset: disconnect all active sessions for this player first.")
+            raise ValueError("Cannot reset while player has active connections. Close other tabs/windows for this player first.")
         if key not in self.players:
             self.players[key] = Player(name=name, color=color)
             self._dirty = True
@@ -624,11 +624,11 @@ class MarketEngine:
         shares_formatted = f"{shares:,}"
         total_value = money(total)
         if side == "buy":
-            pnl_text = f"cash -${total_value:,.2f}"
+            pnl_text = f"lost ${total_value:,.2f}"
             title = f"Large buy: {player.name} accumulated {shares_formatted} {stock.symbol}"
-            body = f"{player.name} bought {shares_formatted} shares at ${price:,.2f}; {pnl_text}."
+            body = f"{player.name} bought {shares_formatted} shares at ${price:,.2f}; {pnl_text} in cash."
             self.add_system_chat(
-                f"Large BUY: {player.name} bought {shares_formatted} {stock.symbol} @ ${price:,.2f} ({pnl_text})."
+                f"Large BUY: {player.name} bought {shares_formatted} {stock.symbol} @ ${price:,.2f} ({pnl_text} in cash)."
             )
             self.add_news(title, body, "normal", stock_id=stock.id)
             return
