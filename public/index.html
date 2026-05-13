@@ -36,6 +36,17 @@
             </select>
             <label for="serverAddressInput">Server Address</label>
             <input id="serverAddressInput" name="serverAddress" type="text" placeholder="localhost:8000 or your-render-url.onrender.com" required>
+            <label>Save Choice</label>
+            <div class="join-intent-group">
+              <label class="join-intent-option">
+                <input id="joinIntentContinue" type="radio" name="joinIntent" value="continue" checked>
+                <span>Continue saved progress</span>
+              </label>
+              <label class="join-intent-option">
+                <input id="joinIntentReset" type="radio" name="joinIntent" value="reset">
+                <span>Reset and start over</span>
+              </label>
+            </div>
           </div>
           <div class="button-grid">
             <button id="connectBtn" type="button">Connect to Server</button>
