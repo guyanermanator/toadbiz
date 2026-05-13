@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Toad Business</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <button id="optionsButton" class="options-button" title="Options" aria-label="Options">⚙</button>
+
+    <div id="lobbyDialog" class="dialog-backdrop">
+      <div class="win-window lobby-dialog">
+        <div class="title-bar">
+          <span>Toad Business - Connect to Server</span>
+          <span class="window-buttons"><span></span><span></span><span></span></span>
+        </div>
+        <div class="window-body stack">
+          <div class="profile-grid">
+            <label for="playerName">Player Name</label>
+            <input id="playerName" name="playerName" maxlength="24" autocomplete="nickname" required>
+            <label for="playerColor">Name Color</label>
+            <input id="playerColor" name="playerColor" type="color" value="#000080">
+            <label for="messageColor">Message Color</label>
+            <input id="messageColor" name="messageColor" type="color" value="#111111">
+            <label for="chatFont">Chat Font</label>
+            <select id="chatFont" name="chatFont">
+              <option>MS Sans Serif</option>
+              <option>Tahoma</option>
+              <option>Verdana</option>
+              <option>Arial</option>
+              <option>Courier New</option>
+              <option>Lucida Console</option>
+              <option>Terminal</option>
+              <option>Consolas</option>
+            </select>
+            <label for="serverAddressInput">Server Address</label>
+            <input id="serverAddressInput" name="serverAddress" type="text" placeholder="localhost:8000 or your-render-url.onrender.com" required>
+          </div>
+          <div class="button-grid">
+            <button id="connectBtn" type="button">Connect to Server</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <main class="app-shell">
+      <section class="ticker-bar win-window">
+        <div class="ticker-track" id="tickerTrack"></div>
+      </section>
+
+      <aside class="market-panel win-window">
+        <div class="title-bar"><span>Market</span></div>
+        <div class="market-summary">
+          <div>
+            <span class="muted">Online</span>
+            <strong id="onlineCount">0</strong>
+          </div>
+          <div>
+            <span class="muted">Global Time</span>
+            <strong id="globalClock">--:--:--</strong>
+          </div>
+        </div>
+        <div class="sidebar-tabs">
+          <button class="tab-button active" data-sidebar-tab="stocks">Stocks</button>
+          <button class="tab-button" data-sidebar-tab="movers">Movers</button>
+          <button class="tab-button" data-sidebar-tab="realEstate">Real Estate</button>
+          <button class="tab-button" data-sidebar-tab="businesses">Businesses</button>
+          <button class="tab-button" data-sidebar-tab="sabotage">Sabotage</button>
+        </div>
+        <div id="stockList" class="stock-list"></div>
+        <div id="moverList" class="mover-list hidden"></div>
+        <div id="realEstateList" class="asset-list hidden"></div>
+        <div id="businessList" class="asset-list hidden"></div>
+        <div id="sabotageList" class="asset-list hidden"></div>
+      </aside>
+
+      <section class="center-panel">
+        <div class="stock-workspace">
+          <section class="chart-panel win-window">
+            <div class="title-bar">
+              <span id="stockTitle">Stock</span>
+              <span id="connectionStatus">Disconnected</span>
+            </div>
+            <div class="stock-stats" id="stockStats"></div>
+            <div class="chart-wrap">
+              <canvas id="stockChart" aria-label="Selected stock history chart"></canvas>
+            </div>
+            <div class="stock-meta" id="stockMeta"></div>
+          </section>
+
+          <section class="trade-panel win-window">
+            <div class="title-bar"><span>Trade Desk</span></div>
+            <div class="window-body stack">
+              <div class="cash-card">
+                <span class="muted">Cash</span>
+                <strong id="cashValue">$0.00</strong>
+              </div>
+              <div class="cash-card">
+                <span class="muted">Income</span>
+                <strong id="incomeValue">$16.50/hr</strong>
+              </div>
+              <button id="upgradeIncomeBtn">Upgrade Income</button>
+              <label for="shareAmount">Shares</label>
+              <input id="shareAmount" type="number" min="1" step="1" value="1">
+              <div class="button-grid">
+                <button id="buyBtn">Buy</button>
+                <button id="sellBtn">Sell</button>
+                <button id="maxBuyBtn">Max Buy</button>
+                <button id="maxSellBtn">Max Sell</button>
+              </div>
+              <div class="owned-box">
+                <span class="muted">Owned</span>
+                <strong id="ownedShares">0 shares</strong>
+              </div>
+              <div id="noticeArea" class="notice-area"></div>
+            </div>
+          </section>
+        </div>
+
+        <section class="portfolio-panel win-window">
+          <div class="title-bar">
+            <span>Portfolio</span>
+            <div class="portfolio-tabs">
+              <button class="tab-button active" data-main-tab="holdings">Holdings</button>
+              <button class="tab-button" data-main-tab="risk">Risk</button>
+            </div>
+          </div>
+          <div id="portfolioSummary" class="portfolio-summary"></div>
+          <div id="portfolioTable" class="portfolio-table"></div>
+        </section>
+      </section>
+
+      <aside class="chat-panel win-window">
+        <div class="title-bar">
+          <span>Players</span>
+          <div class="portfolio-tabs">
+            <button class="tab-button" data-right-tab="lobby">Lobby</button>
+            <button class="tab-button active" data-right-tab="chat">Chat</button>
+            <button class="tab-button" data-right-tab="leaderboard">Top 10</button>
+            <button class="tab-button" data-right-tab="globe">Globe</button>
+          </div>
+        </div>
+        <div id="chatLog" class="chat-log"></div>
+        <form id="chatForm" class="chat-form">
+          <input id="chatInput" maxlength="220" autocomplete="off">
+          <button type="submit">Send</button>
+        </form>
+        <div id="leaderboard" class="leaderboard hidden"></div>
+        <div id="lobbyPanel" class="leaderboard hidden"></div>
+        <div id="globePanel" class="globe-panel hidden">
+          <canvas id="globeCanvas" width="400" height="400" style="display: block; margin: auto; background: #0a0e27;"></canvas>
+          <div id="globeInfo" class="globe-info"></div>
+        </div>
+      </aside>
+    </main>
+
+    <div id="optionsDialog" class="dialog-backdrop hidden">
+      <form id="optionsForm" class="win-window name-dialog">
+        <div class="title-bar"><span>Options</span></div>
+        <div class="window-body stack">
+          <label for="optionsName">Name</label>
+          <input id="optionsName" maxlength="24">
+          <label for="optionsNameColor">Name Color</label>
+          <input id="optionsNameColor" type="color">
+          <label for="optionsMessageColor">Message Color</label>
+          <input id="optionsMessageColor" type="color">
+          <label for="optionsChatFont">Chat Font</label>
+          <select id="optionsChatFont">
+            <option>MS Sans Serif</option>
+            <option>Tahoma</option>
+            <option>Verdana</option>
+            <option>Arial</option>
+            <option>Courier New</option>
+            <option>Lucida Console</option>
+            <option>Terminal</option>
+            <option>Consolas</option>
+          </select>
+          <div class="dialog-actions">
+            <button type="submit">Apply</button>
+            <button type="button" id="optionsCancel">Cancel</button>
+          </div>
+        </div>
+      </form>
+    </div>
+
+    <div id="confirmDialog" class="dialog-backdrop hidden">
+      <form id="confirmForm" class="win-window confirm-dialog">
+        <div class="title-bar"><span id="confirmTitle">Confirm</span></div>
+        <div class="window-body stack">
+          <div id="confirmBody" class="confirm-body"></div>
+          <div class="dialog-actions">
+            <button type="submit" id="confirmAccept">Confirm</button>
+            <button type="button" id="confirmCancel">Cancel</button>
+          </div>
+        </div>
+      </form>
+    </div>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

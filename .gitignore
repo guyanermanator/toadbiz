@@ -1,0 +1,7 @@
+data/game_state.json
+data/game_state.tmp
+server.out.log
+server.err.log
+__pycache__/
+*.pyc
+.pytest_cache/
