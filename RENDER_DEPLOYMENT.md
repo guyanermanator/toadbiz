@@ -49,7 +49,7 @@ git push -u origin main
      ```
     - **Start Command:**
       ```
-      python server.py
+      python -m server
       ```
    - **Instance Type:** `Free` (spins down after 15 min of inactivity, but re-activates instantly when you connect)
 
