@@ -47,10 +47,10 @@ git push -u origin main
      ```
      pip install -r requirements.txt
      ```
-   - **Start Command:**
-     ```
-     python -m server
-     ```
+    - **Start Command:**
+      ```
+      python -m server
+      ```
    - **Instance Type:** `Free` (spins down after 15 min of inactivity, but re-activates instantly when you connect)
 
 4. **Set Environment Variables** (optional for local testing):
