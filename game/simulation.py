@@ -17,6 +17,7 @@ from .assets import (
     real_estate_template,
     sabotage_template,
 )
+from .hexworld import HexWorld
 from .models import (
     BusinessAsset,
     Player,
@@ -43,15 +44,8 @@ ALLOWED_CHAT_FONTS = {
     "Consolas",
 }
 LARGE_TRADE_THRESHOLD = 20
-DEFAULT_FACTION_TERRITORIES = {
-    "toad": 0.15,
-    "frog": 0.15,
-    "bug": 0.15,
-    "lizard": 0.15,
-    "bird": 0.15,
-    "fox": 0.15,
-    "shark": 0.10,
-}
+# Weight of hex-world resource bonus on stock price per tick
+RESOURCE_PULL_WEIGHT = 0.002
 
 
 def normalized_filter_text(value: str) -> str:
@@ -103,6 +97,7 @@ class MarketEngine:
         chat_log: list[dict[str, Any]],
         news_log: list[dict[str, Any]] | None = None,
         faction_territories: dict[str, float] | None = None,
+        hex_world_save: dict[str, Any] | None = None,
     ) -> None:
         self.stocks = stocks
         self.players = players
@@ -114,9 +109,20 @@ class MarketEngine:
         self.last_tick = time.time()
         self.next_event_at = self.last_tick + random.uniform(18.0, 36.0)
         self._dirty = False
-        self.faction_territories = self._normalized_faction_territories(faction_territories)
-        self.last_faction_update = self.last_tick
+
+        # Hex world — load from save or generate fresh
+        if hex_world_save:
+            self.hex_world = HexWorld.from_save(hex_world_save)
+        else:
+            self.hex_world = HexWorld()
+            self.hex_world.generate()
+
+        # Derive faction territories from the hex world
+        self.faction_territories = self.hex_world.faction_territories()
+        self.last_hex_conquest = self.last_tick
+
         self.ensure_business_stocks()
+        self._reconcile_business_hexes()
 
     @property
     def dirty(self) -> bool:
@@ -230,7 +236,10 @@ class MarketEngine:
             pressure = stock.trade_pressure * 0.08 * elapsed
             ceo_bias = self.ceo_bias(stock.ceo) * 0.004 * elapsed
             moon_pull = self.moon_multiplier(current_ts) if stock.moon_sensitive else 0.0
-            multiplier = 1.0 + random_step + baseline_pull + pressure + ceo_bias + moon_pull
+            # Small nudge from hex-world resources (sector biome affinity)
+            resource_mod = self.hex_world.resource_sector_modifier(stock.sector)
+            resource_pull = (resource_mod - 1.0) * RESOURCE_PULL_WEIGHT * elapsed
+            multiplier = 1.0 + random_step + baseline_pull + pressure + ceo_bias + moon_pull + resource_pull
             if abs(multiplier - 1.0) > 0.00005:
                 stock.apply_price_multiplier(multiplier)
                 changed = True
@@ -241,10 +250,11 @@ class MarketEngine:
             elif stock.direction == "down" and not stock.last_event:
                 stock.last_quip = "Sellers are backing away like the floor is sticky."
 
-        # Update faction territories periodically
-        if current_ts - self.last_faction_update >= 4.0:  # Every ~4 seconds
-            self.update_faction_territories(current_ts)
-            self.last_faction_update = current_ts
+        # Run hex-world conquest tick every ~3 seconds
+        if current_ts - self.last_hex_conquest >= 3.0:
+            self.hex_world.conquest_tick()
+            self.faction_territories = self.hex_world.faction_territories()
+            self.last_hex_conquest = current_ts
             changed = True
 
         if current_ts >= self.next_event_at:
@@ -279,21 +289,8 @@ class MarketEngine:
         return 0.0
 
     def update_faction_territories(self, current_ts: float) -> None:
-        """Lightweight faction territory update using random drift and player influence."""
-        # Simple random walk for territories to create dynamic movement
-        factions = list(self.faction_territories.keys())
-        
-        for faction in factions:
-            # Random drift (±1-3% per update, scaled by time)
-            drift = random.gauss(0, 0.015)
-            self.faction_territories[faction] = max(0.05, min(0.25, 
-                self.faction_territories[faction] + drift
-            ))
-        
-        # Normalize to sum to 1.0
-        total = sum(self.faction_territories.values())
-        for faction in factions:
-            self.faction_territories[faction] /= total
+        """Derive faction territory percentages from the hex world hex counts."""
+        self.faction_territories = self.hex_world.faction_territories()
 
     def moon_multiplier(self, current_ts: float) -> float:
         cycle_seconds = 180.0
@@ -468,6 +465,8 @@ class MarketEngine:
         sequence = len(player.businesses) + 1
         business_id = f"biz-{self.player_key(player.name).replace(' ', '-')}-{sequence}-{uuid.uuid4().hex[:5]}"
         stock_id = f"player-{business_id}"
+        # Place the business on the hex world
+        hex_q, hex_r, territory = self.hex_world.assign_business(business_id)
         business = BusinessAsset(
             id=business_id,
             template_id=template.id,
@@ -475,6 +474,9 @@ class MarketEngine:
             value=template.starting_value,
             income_per_hour=template.income_per_hour,
             stock_id=stock_id,
+            hex_q=hex_q,
+            hex_r=hex_r,
+            territory_name=territory,
         )
         stock = Stock(
             id=stock_id,
@@ -497,9 +499,22 @@ class MarketEngine:
         stock.add_history_point()
         player.businesses.append(business)
         self.stocks[stock.id] = stock
-        self.add_news(f"{business.name} listed publicly", "The exchange made room next to the questionable snacks.", "normal", stock_id=stock.id)
+        location_desc = f" in {territory}" if territory and territory != "Unknown Territory" else ""
+        self.add_news(
+            f"{business.name} listed publicly",
+            f"The exchange made room next to the questionable snacks{location_desc}.",
+            "normal",
+            stock_id=stock.id,
+        )
         self._dirty = True
-        return {"name": business.name, "cost": template.cost, "stockId": stock.id}
+        return {
+            "name": business.name,
+            "cost": template.cost,
+            "stockId": stock.id,
+            "territory": territory,
+            "hexQ": hex_q,
+            "hexR": hex_r,
+        }
 
     def upgrade_business(self, player_name: str, business_id: str) -> dict[str, Any]:
         player = self.require_player(player_name)
@@ -540,6 +555,7 @@ class MarketEngine:
         stock = self.stocks.get(business.stock_id)
         if stock:
             stock.last_quip = "The founder cashed out and left a box of receipts."
+        self.hex_world.remove_business(business.id)
         self._dirty = True
         return {"name": business.name, "value": money(business.value)}
 
@@ -894,6 +910,17 @@ class MarketEngine:
             rent_multiplier=float(tenant["rentMultiplier"]),
         )
 
+    def _reconcile_business_hexes(self) -> None:
+        """Ensure every business that lacks a hex location gets one assigned."""
+        for player in self.players.values():
+            for business in player.businesses:
+                if business.hex_q < 0:
+                    q, r, territory = self.hex_world.assign_business(business.id)
+                    business.hex_q = q
+                    business.hex_r = r
+                    if not business.territory_name:
+                        business.territory_name = territory
+
     def find_real_estate(self, player: Player, asset_id: str) -> RealEstateAsset:
         for asset in player.real_estate:
             if asset.id == asset_id:
@@ -930,15 +957,6 @@ class MarketEngine:
         if normalized > 1_000_000:
             raise ValueError("That order is too large.")
         return normalized
-
-    def _normalized_faction_territories(self, payload: dict[str, float] | None) -> dict[str, float]:
-        territories = dict(DEFAULT_FACTION_TERRITORIES)
-        if payload:
-            for key, value in payload.items():
-                if key in territories:
-                    territories[key] = max(0.01, float(value))
-        total = sum(territories.values()) or 1.0
-        return {key: value / total for key, value in territories.items()}
 
     def total_hourly_income(self, player: Player) -> float:
         property_income = sum(asset.hourly_income() for asset in player.real_estate)
@@ -1007,6 +1025,7 @@ class MarketEngine:
                 for item in ticker
             ],
             "factionTerritories": self.faction_territories,
+            "hexWorld": self.hex_world.to_snapshot(),
         }
 
     def player_snapshot(self, player_name: str) -> dict[str, Any]:
@@ -1090,6 +1109,9 @@ class MarketEngine:
                     "upgradeCost": asset.upgrade_cost,
                     "stockId": asset.stock_id,
                     "stockPrice": money(self.stocks[asset.stock_id].price) if asset.stock_id in self.stocks else 0.0,
+                    "hexQ": asset.hex_q,
+                    "hexR": asset.hex_r,
+                    "territory": asset.territory_name or self.hex_world.business_territory(asset.id) or "",
                 }
                 for asset in player.businesses
             ],

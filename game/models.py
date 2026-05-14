@@ -392,6 +392,9 @@ class BusinessAsset:
     income_per_hour: float
     level: int = 1
     stock_id: str = ""
+    hex_q: int = -1
+    hex_r: int = -1
+    territory_name: str = ""
 
     @property
     def upgrade_cost(self) -> float:
@@ -406,6 +409,9 @@ class BusinessAsset:
             "incomePerHour": money(self.income_per_hour),
             "level": self.level,
             "stockId": self.stock_id,
+            "hexQ": self.hex_q,
+            "hexR": self.hex_r,
+            "territoryName": self.territory_name,
         }
 
     @classmethod
@@ -418,6 +424,9 @@ class BusinessAsset:
             income_per_hour=float(payload.get("incomePerHour", 1.5)),
             level=int(payload.get("level", 1)),
             stock_id=str(payload.get("stockId", "")),
+            hex_q=int(payload.get("hexQ", -1)),
+            hex_r=int(payload.get("hexR", -1)),
+            territory_name=str(payload.get("territoryName", "")),
         )
 
 

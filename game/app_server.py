@@ -51,8 +51,8 @@ class GameServer:
         self.port = port
         self.public_dir = public_dir.resolve()
         self.store = GameStore(state_file)
-        stocks, players, chat_log, news_log, faction_territories = self.store.load()
-        self.engine = MarketEngine(stocks, players, chat_log, news_log, faction_territories)
+        stocks, players, chat_log, news_log, faction_territories, hex_world_save = self.store.load()
+        self.engine = MarketEngine(stocks, players, chat_log, news_log, faction_territories, hex_world_save)
         self.clients: set[ClientConnection] = set()
         self.signal_lobbies: dict[str, dict[str, Any]] = {}
         self._last_save = 0.0
@@ -326,6 +326,7 @@ class GameServer:
                     self.engine.chat_log,
                     self.engine.news_log,
                     self.engine.faction_territories,
+                    self.engine.hex_world,
                 )
                 self.engine.mark_clean()
 
@@ -489,5 +490,6 @@ def main() -> None:
             server.engine.chat_log,
             server.engine.news_log,
             server.engine.faction_territories,
+            server.engine.hex_world,
         )
         print("Saved game state.")

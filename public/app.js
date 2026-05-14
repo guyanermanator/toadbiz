@@ -78,6 +78,7 @@ const elements = {
   globePanel: document.querySelector("#globePanel"),
   globeCanvas: document.querySelector("#globeCanvas"),
   globeInfo: document.querySelector("#globeInfo"),
+  globeLegend: document.querySelector("#globeLegend"),
 };
 
 function formatMoney(value) {
@@ -238,6 +239,7 @@ function handleMessage(message) {
     state.player = message.player;
     state.market = message.market;
     state.chatLog = message.chatLog || [];
+    updateHexWorldFromMarket(message.market);
     elements.lobbyDialog.classList.add("hidden");
     renderAll();
     return;
@@ -245,6 +247,7 @@ function handleMessage(message) {
   if (message.type === "snapshot") {
     state.market = message.market;
     if (message.player) state.player = message.player;
+    updateHexWorldFromMarket(message.market);
     renderAll();
     return;
   }
@@ -373,19 +376,25 @@ function renderBusinessMarket() {
     `)
     .join("");
   const ownedMarkup = owned
-    .map((asset) => `
-      <div class="asset-card owned">
-        <strong>${escapeHtml(asset.name)} L${asset.level}</strong>
-        <span>Value ${formatMoney(asset.value)} | Income ${formatMoney(asset.incomePerHour)}/hr</span>
-        <span>Stock ${formatMoney(asset.stockPrice)}</span>
-        <div class="mini-actions">
-          <button data-action="upgrade-business" data-business-id="${escapeHtml(asset.id)}">Upgrade</button>
-          <button data-action="rename-business" data-business-id="${escapeHtml(asset.id)}">Rename</button>
-          <button data-action="select-stock" data-stock-id="${escapeHtml(asset.stockId)}">Stock</button>
-          <button data-action="sell-business" data-business-id="${escapeHtml(asset.id)}">Sell</button>
+    .map((asset) => {
+      const territoryBadge = asset.territory
+        ? `<span class="territory-badge">📍 ${escapeHtml(asset.territory)}</span>`
+        : "";
+      return `
+        <div class="asset-card owned">
+          <strong>${escapeHtml(asset.name)} L${asset.level}</strong>
+          <span>Value ${formatMoney(asset.value)} | Income ${formatMoney(asset.incomePerHour)}/hr</span>
+          <span>Stock ${formatMoney(asset.stockPrice)}</span>
+          ${territoryBadge}
+          <div class="mini-actions">
+            <button data-action="upgrade-business" data-business-id="${escapeHtml(asset.id)}">Upgrade</button>
+            <button data-action="rename-business" data-business-id="${escapeHtml(asset.id)}">Rename</button>
+            <button data-action="select-stock" data-stock-id="${escapeHtml(asset.stockId)}">Stock</button>
+            <button data-action="sell-business" data-business-id="${escapeHtml(asset.id)}">Sell</button>
+          </div>
         </div>
-      </div>
-    `)
+      `;
+    })
     .join("");
   elements.businessList.innerHTML = `<div class="asset-section-title">Buy Business</div>${catalogMarkup}<div class="asset-section-title">Owned</div>${ownedMarkup || emptySmall("No businesses yet")}`;
 }
@@ -671,187 +680,322 @@ function renderLobbyPanel() {
   `;
 }
 
+// ---------------------------------------------------------------------------
+// Hex World Globe View
+// ---------------------------------------------------------------------------
+
 const FACTIONS = {
-  toad: { color: "#4a9d6f", name: "Toad" },
-  frog: { color: "#2d7a3a", name: "Frog" },
-  bug: { color: "#8b5a2b", name: "Bug" },
+  toad:   { color: "#4a9d6f", name: "Toad" },
+  frog:   { color: "#2d7a3a", name: "Frog" },
+  bug:    { color: "#8b5a2b", name: "Bug" },
   lizard: { color: "#ff6b35", name: "Lizard" },
-  bird: { color: "#ffd700", name: "Bird" },
-  fox: { color: "#d2691e", name: "Fox" },
-  shark: { color: "#0066cc", name: "Shark" },
+  bird:   { color: "#ffd700", name: "Bird" },
+  fox:    { color: "#d2691e", name: "Fox" },
+  shark:  { color: "#0066cc", name: "Shark" },
 };
-const FACTION_KEYS = Object.keys(FACTIONS);
-const MAP_WIDTH = 96;
-const MAP_HEIGHT = 56;
-const WATER = 255;
-const LAND_SHAPE_X = 1.0;
-const LAND_SHAPE_Y = 0.62;
-const CONQUEST_BASE_CHANCE = 0.5;
-const CONQUEST_WEIGHT_SCALE = 0.65;
-const CONQUEST_RANDOM_VARIANCE = 0.2;
-const MIN_CONQUEST_CHANCE = 0.08;
-const MAX_CONQUEST_CHANCE = 0.92;
-const RANDOM_RESEED_RATE = 0.0009;
-const mapState = {
-  initialized: false,
+
+const HEX_BIOME_COLORS = [
+  "#0d2157",  // 0 ocean   – deep navy
+  "#6aaa44",  // 1 plains  – green
+  "#2d6a2d",  // 2 forest  – dark green
+  "#7a6551",  // 3 mountain– slate brown
+  "#c9942a",  // 4 desert  – sandy gold
+  "#4a7535",  // 5 swamp   – murky olive
+  "#8ab5c4",  // 6 tundra  – pale blue-grey
+  "#2a7faa",  // 7 coastal – medium blue
+];
+
+const HEX_BIOME_NAMES = [
+  "Ocean", "Plains", "Forest", "Mountain",
+  "Desert", "Swamp", "Tundra", "Coastal",
+];
+
+const HEX_IMP_NAMES = ["", "City", "Town", "Farm", "Fort", "Mine", "Port"];
+
+// Pointy-top hex geometry
+const HEX_SIZE = 7;   // px, center-to-corner radius
+const HEX_W = Math.sqrt(3) * HEX_SIZE;    // ≈12.12 px flat width
+const HEX_H = 2 * HEX_SIZE;               // 14 px tall
+
+const hexState = {
   running: false,
   frameId: null,
-  cells: new Uint8Array(MAP_WIDTH * MAP_HEIGHT),
-  terrain: new Uint8Array(MAP_WIDTH * MAP_HEIGHT),
-  counts: new Array(FACTION_KEYS.length).fill(0),
-  offscreenCanvas: null,
-  offscreenCtx: null,
-  imageData: null,
+  world: null,         // last received hexWorld from market snapshot
+  territories: null,   // sparse dict of "q,r" → name
+  businesses: null,    // dict of biz_id → {q,r,biome,faction,territory}
+  hovered: null,       // {q, r} of hovered cell, or null
+  lastRender: 0,
+  dirty: true,
 };
 
-function clamp(value, min, max) {
-  return Math.min(max, Math.max(min, value));
+/**
+ * Decode a packed hex cell integer.
+ * Bit layout (matches game/hexworld.py HexCell.pack()):
+ *   bits  0-3:  biome index  (0=ocean … 7=coastal)
+ *   bits  4-7:  faction index (0=neutral, 1=toad … 7=shark)
+ *   bits  8-11: improvement index (0=none … 6=port)
+ *   bits 12-18: population (0-127)
+ */
+function decodeCell(packed) {
+  return {
+    biome:       packed & 0xF,
+    factionIdx:  (packed >> 4) & 0xF,
+    improvement: (packed >> 8) & 0xF,
+    population:  (packed >> 12) & 0x7F,
+  };
 }
 
-function targetTerritoryWeights() {
-  const source = state.market?.factionTerritories || {};
-  const defaultWeight = 1 / FACTION_KEYS.length;
-  const values = FACTION_KEYS.map((key) => Number(source[key] ?? defaultWeight));
-  const total = values.reduce((sum, value) => sum + Math.max(0.001, value), 0);
-  return values.map((value) => Math.max(0.001, value) / total);
+const FACTION_IDX_TO_KEY = [null, "toad", "frog", "bug", "lizard", "bird", "fox", "shark"];
+
+/** Convert odd-r offset hex coordinates to canvas pixel center (pointy-top). */
+function hexToPixel(q, r) {
+  const x = HEX_W * (q + 0.5 * (r & 1)) + HEX_SIZE;
+  const y = HEX_SIZE * 1.5 * r + HEX_SIZE;
+  return { x, y };
 }
 
-function pickFaction(weights) {
-  let roll = Math.random();
-  for (let i = 0; i < weights.length; i += 1) {
-    roll -= weights[i];
-    if (roll <= 0) return i;
+/** Convert pixel position to nearest hex cell (odd-r offset, pointy-top). */
+function pixelToHex(px, py) {
+  // Approximate by column/row then correct
+  const ry = (py - HEX_SIZE) / (HEX_SIZE * 1.5);
+  const r = Math.round(ry);
+  const qRaw = (px - HEX_SIZE) / HEX_W - 0.5 * (r & 1);
+  const q = Math.round(qRaw);
+  return { q, r };
+}
+
+/** Draw a pointy-top hexagon centred at (cx, cy) with given radius. */
+function hexPath(ctx, cx, cy, radius) {
+  ctx.beginPath();
+  for (let i = 0; i < 6; i += 1) {
+    const angle = (Math.PI / 3) * i - Math.PI / 6;  // -30° start
+    const px = cx + radius * Math.cos(angle);
+    const py = cy + radius * Math.sin(angle);
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
   }
-  return weights.length - 1;
+  ctx.closePath();
 }
 
-function initializeTerritoryMap() {
-  const weights = targetTerritoryWeights();
-  for (let y = 0; y < MAP_HEIGHT; y += 1) {
-    for (let x = 0; x < MAP_WIDTH; x += 1) {
-      const i = y * MAP_WIDTH + x;
-      const nx = (x / (MAP_WIDTH - 1)) * 2 - 1;
-      const ny = (y / (MAP_HEIGHT - 1)) * 2 - 1;
-      const radial = (nx * nx) / LAND_SHAPE_X + (ny * ny) / LAND_SHAPE_Y;
-      const coastNoise = (Math.sin(x * 0.18) + Math.cos(y * 0.21)) * 0.08;
-      const isWater = radial > (0.90 + coastNoise + (Math.random() * 0.06));
-      mapState.terrain[i] = isWater ? WATER : 0;
-      mapState.cells[i] = isWater ? WATER : pickFaction(weights);
-    }
+// Improvement marker radius by improvement index (matches IMP_* server constants)
+const HEX_IMP_RADIUS = [0, 3.2, 2.2, 2.0, 2.0, 2.0, 2.0];  // index 0 = none
+// Improvement marker colour by index (0=none, 1=City, 2=Town, 3=Farm, 4=Fort, 5=Mine, 6=Port)
+const HEX_IMP_COLORS = ["", "#fffde7", "#e0e0e0", "#a5d6a7", "#ef9a9a", "#ce93d8", "#80deea"];
+
+/** Blend two hex-colour strings by a 0-1 factor. Falls back to hex1 on invalid input. */
+function blendColors(hex1, hex2, t) {
+  if (!/^#[0-9a-fA-F]{6}$/.test(hex1) || !/^#[0-9a-fA-F]{6}$/.test(hex2)) {
+    return hex1;
   }
-  mapState.initialized = true;
+  const r1 = parseInt(hex1.slice(1, 3), 16);
+  const g1 = parseInt(hex1.slice(3, 5), 16);
+  const b1 = parseInt(hex1.slice(5, 7), 16);
+  const r2 = parseInt(hex2.slice(1, 3), 16);
+  const g2 = parseInt(hex2.slice(3, 5), 16);
+  const b2 = parseInt(hex2.slice(5, 7), 16);
+  const r = Math.round(r1 + (r2 - r1) * t).toString(16).padStart(2, "0");
+  const g = Math.round(g1 + (g2 - g1) * t).toString(16).padStart(2, "0");
+  const b = Math.round(b1 + (b2 - b1) * t).toString(16).padStart(2, "0");
+  return `#${r}${g}${b}`;
 }
 
-function stepTerritoryMap() {
-  const weights = targetTerritoryWeights();
-  const iterations = 320;
-  for (let step = 0; step < iterations; step += 1) {
-    const x = Math.floor(Math.random() * MAP_WIDTH);
-    const y = Math.floor(Math.random() * MAP_HEIGHT);
-    const i = y * MAP_WIDTH + x;
-    if (mapState.terrain[i] === WATER) continue;
-    const dx = Math.floor(Math.random() * 3) - 1;
-    const dy = Math.floor(Math.random() * 3) - 1;
-    if (dx === 0 && dy === 0) continue;
-    const nx = (x + dx + MAP_WIDTH) % MAP_WIDTH;
-    const ny = clamp(y + dy, 0, MAP_HEIGHT - 1);
-    const ni = ny * MAP_WIDTH + nx;
-    if (mapState.terrain[ni] === WATER) continue;
-    const current = mapState.cells[i];
-    const challenger = mapState.cells[ni];
-    if (challenger === WATER || current === challenger) continue;
-    const challengeBias = CONQUEST_BASE_CHANCE
-      + (weights[challenger] - weights[current]) * CONQUEST_WEIGHT_SCALE
-      + (Math.random() - 0.5) * CONQUEST_RANDOM_VARIANCE;
-    if (Math.random() < clamp(challengeBias, MIN_CONQUEST_CHANCE, MAX_CONQUEST_CHANCE)) {
-      mapState.cells[i] = challenger;
-    }
-  }
-  for (let i = 0; i < mapState.cells.length; i += 1) {
-    if (mapState.terrain[i] !== WATER && Math.random() < RANDOM_RESEED_RATE) {
-      mapState.cells[i] = pickFaction(weights);
-    }
-  }
-}
-
-function ensureOffscreenCanvas() {
-  if (mapState.offscreenCanvas) return;
-  mapState.offscreenCanvas = document.createElement("canvas");
-  mapState.offscreenCanvas.width = MAP_WIDTH;
-  mapState.offscreenCanvas.height = MAP_HEIGHT;
-  mapState.offscreenCtx = mapState.offscreenCanvas.getContext("2d");
-  mapState.imageData = mapState.offscreenCtx.createImageData(MAP_WIDTH, MAP_HEIGHT);
-}
-
-function drawTerritoryMap() {
-  const canvas = elements.globeCanvas;
-  if (!canvas) return;
-  ensureOffscreenCanvas();
-  mapState.counts.fill(0);
-  const pixels = mapState.imageData.data;
-  for (let i = 0; i < mapState.cells.length; i += 1) {
-    const offset = i * 4;
-    if (mapState.terrain[i] === WATER) {
-      pixels[offset] = 8;
-      pixels[offset + 1] = 14;
-      pixels[offset + 2] = 44;
-      pixels[offset + 3] = 255;
-      continue;
-    }
-    const factionIndex = mapState.cells[i];
-    const key = FACTION_KEYS[factionIndex];
-    const color = FACTIONS[key]?.color || "#444444";
-    const r = parseInt(color.slice(1, 3), 16);
-    const g = parseInt(color.slice(3, 5), 16);
-    const b = parseInt(color.slice(5, 7), 16);
-    pixels[offset] = r;
-    pixels[offset + 1] = g;
-    pixels[offset + 2] = b;
-    pixels[offset + 3] = 255;
-    mapState.counts[factionIndex] += 1;
-  }
-  mapState.offscreenCtx.putImageData(mapState.imageData, 0, 0);
+function drawHexGrid(canvas, world) {
+  if (!world) return;
+  const { width, height, cells } = world;
   const ctx = canvas.getContext("2d");
-  ctx.fillStyle = "#0a0e27";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(mapState.offscreenCanvas, 0, 0, canvas.width, canvas.height);
-}
 
-function renderGlobe() {
-  if (!mapState.initialized) {
-    initializeTerritoryMap();
+  // Size canvas to fit grid
+  const canvasW = Math.ceil(HEX_W * (width + 0.5) + HEX_SIZE * 2);
+  const canvasH = Math.ceil(HEX_SIZE * 1.5 * height + HEX_SIZE * 2);
+  if (canvas.width !== canvasW || canvas.height !== canvasH) {
+    canvas.width = canvasW;
+    canvas.height = canvasH;
   }
-  stepTerritoryMap();
-  drawTerritoryMap();
-  const totalLand = mapState.counts.reduce((sum, value) => sum + value, 0) || 1;
-  const leaderIndex = mapState.counts.indexOf(Math.max(...mapState.counts));
-  const leaderKey = FACTION_KEYS[leaderIndex];
-  const leaderPercent = (mapState.counts[leaderIndex] / totalLand) * 100;
-  let infoText = `<strong>${FACTIONS[leaderKey].name}</strong> controls ${leaderPercent.toFixed(1)}% of simulated territory.`;
-  if (state.market?.stocks) {
-    const orbStock = state.market.stocks.find((item) => item.symbol === "ORB");
-    if (orbStock) {
-      infoText += `<br/><small style="color:#aaa;">ORB signal: $${Number(orbStock.price).toFixed(2)} influences frontier volatility.</small>`;
+
+  ctx.fillStyle = "#060d1f";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const territories = hexState.territories || {};
+  const bizCells = new Set();
+  if (hexState.businesses) {
+    for (const biz of Object.values(hexState.businesses)) {
+      bizCells.add(`${biz.q},${biz.r}`);
     }
   }
-  elements.globeInfo.innerHTML = infoText;
-  if (mapState.running) {
-    mapState.frameId = requestAnimationFrame(renderGlobe);
+  const hq = hexState.hovered?.q;
+  const hr = hexState.hovered?.r;
+
+  for (let idx = 0; idx < cells.length; idx += 1) {
+    const q = idx % width;
+    const r = Math.floor(idx / width);
+    const cell = decodeCell(cells[idx]);
+    const { x, y } = hexToPixel(q, r);
+    const isHovered = (q === hq && r === hr);
+
+    const biomeColor = HEX_BIOME_COLORS[cell.biome] || "#333";
+    const factionKey = FACTION_IDX_TO_KEY[cell.factionIdx] || null;
+    const factionColor = factionKey ? FACTIONS[factionKey]?.color || null : null;
+
+    // Fill: blend biome + faction tint (30%)
+    const fillColor = factionColor && cell.biome !== 0
+      ? blendColors(biomeColor, factionColor, 0.30)
+      : biomeColor;
+
+    hexPath(ctx, x, y, HEX_SIZE - 0.5);
+    ctx.fillStyle = isHovered ? "#ffffcc" : fillColor;
+    ctx.fill();
+
+    // Border: faction color for owned land, dark for ocean
+    if (cell.biome !== 0 && factionColor) {
+      ctx.strokeStyle = isHovered ? "#ffffff" : factionColor;
+      ctx.lineWidth = isHovered ? 1.5 : 0.8;
+      ctx.stroke();
+    } else if (cell.biome !== 0) {
+      ctx.strokeStyle = "#555";
+      ctx.lineWidth = 0.5;
+      ctx.stroke();
+    }
+
+    // Improvement marker
+    if (cell.improvement > 0 && cell.biome !== 0) {
+      const impR = HEX_IMP_RADIUS[cell.improvement] || 2.0;
+      ctx.beginPath();
+      ctx.arc(x, y, impR, 0, Math.PI * 2);
+      ctx.fillStyle = HEX_IMP_COLORS[cell.improvement] || "#fff";
+      ctx.fill();
+    }
+
+    // Business marker (bright dot)
+    if (bizCells.has(`${q},${r}`)) {
+      ctx.beginPath();
+      ctx.arc(x, y + 2, 2.0, 0, Math.PI * 2);
+      ctx.fillStyle = "#ffee00";
+      ctx.fill();
+    }
   }
+}
+
+function updateHexWorldFromMarket(market) {
+  if (!market?.hexWorld) return;
+  hexState.world = market.hexWorld;
+  hexState.territories = market.hexWorld.territories || {};
+  hexState.businesses = market.hexWorld.businesses || {};
+  hexState.dirty = true;
+}
+
+function getHexInfoAt(q, r) {
+  const world = hexState.world;
+  if (!world) return null;
+  const { width, height, cells } = world;
+  if (q < 0 || r < 0 || q >= width || r >= height) return null;
+  const idx = r * width + q;
+  if (idx >= cells.length) return null;
+  const cell = decodeCell(cells[idx]);
+  const name = hexState.territories?.[`${q},${r}`] || null;
+  const biome = HEX_BIOME_NAMES[cell.biome] || "Unknown";
+  const faction = FACTION_IDX_TO_KEY[cell.factionIdx];
+  const imp = HEX_IMP_NAMES[cell.improvement] || "";
+  // Find businesses at this hex
+  const bizList = Object.entries(hexState.businesses || {})
+    .filter(([, b]) => b.q === q && b.r === r)
+    .map(([id]) => id);
+  return { q, r, biome, faction, imp, pop: cell.population, name, bizList };
+}
+
+function buildGlobeInfo(hoveredInfo) {
+  const world = hexState.world;
+  const ft = state.market?.factionTerritories || {};
+  const leader = Object.entries(ft).sort((a, b) => b[1] - a[1])[0];
+  const leaderName = leader ? (FACTIONS[leader[0]]?.name || leader[0]) : "Unknown";
+  const leaderPct = leader ? (leader[1] * 100).toFixed(1) : "0";
+
+  let html = `<strong>${escapeHtml(leaderName)}</strong> controls ${leaderPct}% of territory.`;
+
+  if (world) {
+    html += ` <small style="color:#666">${world.width}×${world.height} hex grid</small>`;
+  }
+
+  if (hoveredInfo) {
+    const fName = hoveredInfo.faction ? (FACTIONS[hoveredInfo.faction]?.name || hoveredInfo.faction) : "Neutral";
+    const fColor = hoveredInfo.faction ? safeColor(FACTIONS[hoveredInfo.faction]?.color) : "#888";
+    html += `<hr style="margin:4px 0;border-color:#ccc">`;
+    html += `<strong>${escapeHtml(hoveredInfo.name || hoveredInfo.biome)}</strong>`;
+    html += ` — <span style="color:${fColor}">${escapeHtml(fName)}</span>`;
+    html += `<br><small>${escapeHtml(hoveredInfo.biome)}`;
+    if (hoveredInfo.imp) html += ` &bull; ${escapeHtml(hoveredInfo.imp)}`;
+    if (hoveredInfo.pop > 0) html += ` &bull; Pop ${hoveredInfo.pop}`;
+    html += `</small>`;
+    if (hoveredInfo.bizList.length > 0) {
+      html += `<br><small style="color:#555">Businesses: ${hoveredInfo.bizList.length}</small>`;
+    }
+  }
+
+  if (elements.globeInfo) elements.globeInfo.innerHTML = html;
+
+  // Legend
+  if (elements.globeLegend) {
+    const biomeItems = HEX_BIOME_NAMES.slice(1)
+      .map((name, i) => `<span class="globe-legend-item"><span class="legend-swatch" style="background:${HEX_BIOME_COLORS[i + 1]}"></span>${escapeHtml(name)}</span>`)
+      .join("");
+    const factionItems = Object.entries(FACTIONS)
+      .map(([key, f]) => {
+        const pct = ft[key] ? (ft[key] * 100).toFixed(0) : "0";
+        return `<span class="globe-legend-item"><span class="legend-swatch" style="background:${safeColor(f.color)};border:1px solid #333"></span>${escapeHtml(f.name)} ${pct}%</span>`;
+      })
+      .join("");
+    elements.globeLegend.innerHTML = `
+      <div class="globe-legend-section"><strong>Biomes</strong><div class="globe-legend-row">${biomeItems}</div></div>
+      <div class="globe-legend-section"><strong>Factions</strong><div class="globe-legend-row">${factionItems}</div></div>
+    `;
+  }
+}
+
+function globeAnimFrame() {
+  if (!hexState.running) return;
+  if (hexState.dirty) {
+    const canvas = elements.globeCanvas;
+    if (canvas) drawHexGrid(canvas, hexState.world);
+    hexState.dirty = false;
+  }
+  hexState.frameId = requestAnimationFrame(globeAnimFrame);
 }
 
 function startGlobeAnimation() {
-  if (mapState.running) return;
-  mapState.running = true;
-  mapState.frameId = requestAnimationFrame(renderGlobe);
+  if (hexState.running) return;
+  hexState.running = true;
+  hexState.dirty = true;
+  hexState.frameId = requestAnimationFrame(globeAnimFrame);
+  // Attach hover listener once
+  const canvas = elements.globeCanvas;
+  if (canvas && !canvas._hexHoverAttached) {
+    canvas._hexHoverAttached = true;
+    canvas.addEventListener("mousemove", (event) => {
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const px = (event.clientX - rect.left) * scaleX;
+      const py = (event.clientY - rect.top) * scaleY;
+      const { q, r } = pixelToHex(px, py);
+      const info = getHexInfoAt(q, r);
+      if (info) {
+        hexState.hovered = { q, r };
+        hexState.dirty = true;
+        buildGlobeInfo(info);
+      }
+    });
+    canvas.addEventListener("mouseleave", () => {
+      hexState.hovered = null;
+      hexState.dirty = true;
+      buildGlobeInfo(null);
+    });
+  }
+  buildGlobeInfo(null);
 }
 
 function stopGlobeAnimation() {
-  mapState.running = false;
-  if (mapState.frameId) {
-    cancelAnimationFrame(mapState.frameId);
-    mapState.frameId = null;
+  hexState.running = false;
+  if (hexState.frameId) {
+    cancelAnimationFrame(hexState.frameId);
+    hexState.frameId = null;
   }
 }
 
@@ -868,6 +1012,7 @@ function renderRightTab() {
     stopGlobeAnimation();
   }
 }
+
 
 function showNotice(message, isError = false) {
   state.lastNoticeAt = Date.now();
