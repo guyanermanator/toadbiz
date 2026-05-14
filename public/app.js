@@ -728,7 +728,14 @@ const hexState = {
   dirty: true,
 };
 
-/** Decode a packed hex cell integer into { biome, factionIdx, improvement, population } */
+/**
+ * Decode a packed hex cell integer.
+ * Bit layout (matches game/hexworld.py HexCell.pack()):
+ *   bits  0-3:  biome index  (0=ocean … 7=coastal)
+ *   bits  4-7:  faction index (0=neutral, 1=toad … 7=shark)
+ *   bits  8-11: improvement index (0=none … 6=port)
+ *   bits 12-18: population (0-127)
+ */
 function decodeCell(packed) {
   return {
     biome:       packed & 0xF,
@@ -769,8 +776,16 @@ function hexPath(ctx, cx, cy, radius) {
   ctx.closePath();
 }
 
-/** Blend two hex-colour strings by a 0-1 factor. */
+// Improvement marker radius by improvement index (matches IMP_* server constants)
+const HEX_IMP_RADIUS = [0, 3.2, 2.2, 2.0, 2.0, 2.0, 2.0];  // index 0 = none
+// Improvement marker colour by index (0=none, 1=City, 2=Town, 3=Farm, 4=Fort, 5=Mine, 6=Port)
+const HEX_IMP_COLORS = ["", "#fffde7", "#e0e0e0", "#a5d6a7", "#ef9a9a", "#ce93d8", "#80deea"];
+
+/** Blend two hex-colour strings by a 0-1 factor. Falls back to hex1 on invalid input. */
 function blendColors(hex1, hex2, t) {
+  if (!/^#[0-9a-fA-F]{6}$/.test(hex1) || !/^#[0-9a-fA-F]{6}$/.test(hex2)) {
+    return hex1;
+  }
   const r1 = parseInt(hex1.slice(1, 3), 16);
   const g1 = parseInt(hex1.slice(3, 5), 16);
   const b1 = parseInt(hex1.slice(5, 7), 16);
@@ -842,11 +857,10 @@ function drawHexGrid(canvas, world) {
 
     // Improvement marker
     if (cell.improvement > 0 && cell.biome !== 0) {
-      const impColors = ["", "#fffde7", "#e0e0e0", "#a5d6a7", "#ef9a9a", "#ce93d8", "#80deea"];
-      const impR = {1: 3.2, 2: 2.2, 3: 2.0, 4: 2.0, 5: 2.0, 6: 2.0}[cell.improvement] || 2.0;
+      const impR = HEX_IMP_RADIUS[cell.improvement] || 2.0;
       ctx.beginPath();
       ctx.arc(x, y, impR, 0, Math.PI * 2);
-      ctx.fillStyle = impColors[cell.improvement] || "#fff";
+      ctx.fillStyle = HEX_IMP_COLORS[cell.improvement] || "#fff";
       ctx.fill();
     }
 

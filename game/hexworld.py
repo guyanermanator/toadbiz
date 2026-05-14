@@ -97,7 +97,18 @@ IMP_FORT = 4
 IMP_MINE = 5
 IMP_PORT = 6
 
-IMPROVEMENT_NAMES = ["", "City", "Town", "Farm", "Fort", "Mine", "Port"]
+# Latitude threshold above which cold biomes appear
+TUNDRA_LATITUDE_THRESHOLD = 0.65
+
+# Population cap (matches 0x7F in the pack/unpack mask)
+MAX_POPULATION = 127
+
+# ---------------------------------------------------------------------------
+# Conquest tuning
+# ---------------------------------------------------------------------------
+BASE_CONQUEST_CHANCE = 0.30
+CONQUEST_AFFINITY_WEIGHT = 0.12
+CONQUEST_MODIFIER_WEIGHT = 0.08
 
 # ---------------------------------------------------------------------------
 # Territory name pool
@@ -162,7 +173,7 @@ class HexCell:
             (self.biome & 0xF)
             | ((self.faction_idx & 0xF) << 4)
             | ((self.improvement & 0xF) << 8)
-            | ((max(0, min(127, self.population)) & 0x7F) << 12)
+            | ((max(0, min(MAX_POPULATION, self.population)) & 0x7F) << 12)
         )
 
     @classmethod
@@ -254,7 +265,7 @@ class HexWorld:
             elif h < coastal_t:
                 biome = BIOME_COASTAL
             elif h >= mountain_t:
-                biome = BIOME_TUNDRA if latitude > 0.65 else BIOME_MOUNTAIN
+                biome = BIOME_TUNDRA if latitude > TUNDRA_LATITUDE_THRESHOLD else BIOME_MOUNTAIN
             elif latitude > 0.75 and h > (ocean_t + coastal_t) / 2 + 0.1:
                 biome = BIOME_TUNDRA
             elif moisture < 0.25:
@@ -275,7 +286,7 @@ class HexWorld:
                     BIOME_DESERT: 0.5, BIOME_MOUNTAIN: 0.7, BIOME_SWAMP: 0.9,
                     BIOME_TUNDRA: 0.4,
                 }.get(biome, 1.0)
-                pop = min(127, int(pop_noise * factor * 45))
+                pop = min(MAX_POPULATION, int(pop_noise * factor * 45))
 
             self.cells.append(HexCell(q=q, r=r, biome=biome, population=pop))
 
@@ -414,13 +425,13 @@ class HexWorld:
                 IMP_TOWN: 0.10,
             }.get(cell.improvement, 0.0)
             pop_def = min(0.25, cell.population / 400.0)
-            chance = 0.30 + (aff - 1.0) * 0.12 + (mod - 1.0) * 0.08 - defense - pop_def
+            chance = BASE_CONQUEST_CHANCE + (aff - 1.0) * CONQUEST_AFFINITY_WEIGHT + (mod - 1.0) * CONQUEST_MODIFIER_WEIGHT - defense - pop_def
             chance = max(0.04, min(0.70, chance))
 
             if self._rng.random() < chance:
                 cell.faction_idx = challenger.faction_idx
                 cell.population = max(0, cell.population - self._rng.randint(0, 4))
-                challenger.population = min(127, challenger.population + self._rng.randint(0, 2))
+                challenger.population = min(MAX_POPULATION, challenger.population + self._rng.randint(0, 2))
                 changed.append((cell.q, cell.r))
 
         # Organic population growth for a sample of inhabited cells
@@ -429,7 +440,7 @@ class HexWorld:
             if cell.faction_idx == 0:
                 continue
             delta = self._rng.randint(-1, 2)
-            cell.population = max(1, min(127, cell.population + delta))
+            cell.population = max(1, min(MAX_POPULATION, cell.population + delta))
             # Auto-promote improvements based on population
             if cell.population >= 60 and cell.improvement == IMP_TOWN:
                 cell.improvement = IMP_CITY
@@ -479,7 +490,7 @@ class HexWorld:
             for res in relevant:
                 amt = BIOME_RESOURCES.get(cell.biome, {}).get(res, 0.0)
                 if amt > 0:
-                    bonus += (amt - 1.0) * ib * (cell.population / 127.0) * 0.00025
+                    bonus += (amt - 1.0) * ib * (cell.population / MAX_POPULATION) * 0.00025
         return max(0.96, min(1.04, 1.0 + bonus))
 
     # -----------------------------------------------------------------------

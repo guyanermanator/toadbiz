@@ -44,6 +44,8 @@ ALLOWED_CHAT_FONTS = {
     "Consolas",
 }
 LARGE_TRADE_THRESHOLD = 20
+# Weight of hex-world resource bonus on stock price per tick
+RESOURCE_PULL_WEIGHT = 0.002
 
 
 def normalized_filter_text(value: str) -> str:
@@ -236,7 +238,7 @@ class MarketEngine:
             moon_pull = self.moon_multiplier(current_ts) if stock.moon_sensitive else 0.0
             # Small nudge from hex-world resources (sector biome affinity)
             resource_mod = self.hex_world.resource_sector_modifier(stock.sector)
-            resource_pull = (resource_mod - 1.0) * 0.002 * elapsed
+            resource_pull = (resource_mod - 1.0) * RESOURCE_PULL_WEIGHT * elapsed
             multiplier = 1.0 + random_step + baseline_pull + pressure + ceo_bias + moon_pull + resource_pull
             if abs(multiplier - 1.0) > 0.00005:
                 stock.apply_price_multiplier(multiplier)

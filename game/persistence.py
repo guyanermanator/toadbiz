@@ -41,7 +41,9 @@ class GameStore:
             try:
                 with self.state_file.open("r", encoding="utf-8") as handle:
                     saved = json.load(handle)
-            except (json.JSONDecodeError, ValueError):
+            except (json.JSONDecodeError, ValueError) as exc:
+                import sys
+                print(f"[GameStore] Warning: could not parse {self.state_file}: {exc}", file=sys.stderr)
                 saved = {}
         saved = self._migrate_payload(saved)
 
