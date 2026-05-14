@@ -51,8 +51,8 @@ class GameServer:
         self.port = port
         self.public_dir = public_dir.resolve()
         self.store = GameStore(state_file)
-        stocks, players, chat_log, news_log = self.store.load()
-        self.engine = MarketEngine(stocks, players, chat_log, news_log)
+        stocks, players, chat_log, news_log, faction_territories = self.store.load()
+        self.engine = MarketEngine(stocks, players, chat_log, news_log, faction_territories)
         self.clients: set[ClientConnection] = set()
         self.signal_lobbies: dict[str, dict[str, Any]] = {}
         self._last_save = 0.0
@@ -215,6 +215,7 @@ class GameServer:
                 str(message.get("color", "")),
                 str(message.get("messageColor", "")),
                 str(message.get("chatFont", "")),
+                str(message.get("joinIntent", "continue")),
             )
             client.name = player.name
             await client.send(
@@ -319,7 +320,13 @@ class GameServer:
         while True:
             await asyncio.sleep(5.0)
             if self.engine.dirty:
-                self.store.save(self.engine.stocks, self.engine.players, self.engine.chat_log, self.engine.news_log)
+                self.store.save(
+                    self.engine.stocks,
+                    self.engine.players,
+                    self.engine.chat_log,
+                    self.engine.news_log,
+                    self.engine.faction_territories,
+                )
                 self.engine.mark_clean()
 
     async def send_player(self, client: ClientConnection) -> None:
@@ -476,5 +483,11 @@ def main() -> None:
     try:
         asyncio.run(server.run())
     except KeyboardInterrupt:
-        server.store.save(server.engine.stocks, server.engine.players, server.engine.chat_log, server.engine.news_log)
+        server.store.save(
+            server.engine.stocks,
+            server.engine.players,
+            server.engine.chat_log,
+            server.engine.news_log,
+            server.engine.faction_territories,
+        )
         print("Saved game state.")

@@ -6,6 +6,7 @@ const state = {
   playerColor: localStorage.getItem("toadBusinessColor") || "#000080",
   messageColor: localStorage.getItem("toadBusinessMessageColor") || "#111111",
   chatFont: localStorage.getItem("toadBusinessChatFont") || "MS Sans Serif",
+  joinIntent: localStorage.getItem("toadBusinessJoinIntent") === "reset" ? "reset" : "continue",
   selectedStockId: localStorage.getItem("toadBusinessSelectedStock") || "toad-bean",
   sidebarTab: "stocks",
   mainTab: "holdings",
@@ -37,6 +38,8 @@ const elements = {
   playerColor: document.querySelector("#playerColor"),
   messageColor: document.querySelector("#messageColor"),
   chatFont: document.querySelector("#chatFont"),
+  joinIntentContinue: document.querySelector("#joinIntentContinue"),
+  joinIntentReset: document.querySelector("#joinIntentReset"),
   confirmDialog: document.querySelector("#confirmDialog"),
   confirmForm: document.querySelector("#confirmForm"),
   confirmTitle: document.querySelector("#confirmTitle"),
@@ -136,6 +139,13 @@ function profilePayload() {
   };
 }
 
+function joinPayload() {
+  return {
+    ...profilePayload(),
+    joinIntent: state.joinIntent === "reset" ? "reset" : "continue",
+  };
+}
+
 function saveProfileFromLobby() {
   const name = elements.playerName.value.trim();
   if (!name) {
@@ -146,10 +156,12 @@ function saveProfileFromLobby() {
   state.playerColor = safeColor(elements.playerColor.value);
   state.messageColor = safeMessageColor(elements.messageColor.value);
   state.chatFont = safeFont(elements.chatFont.value);
+  state.joinIntent = elements.joinIntentReset?.checked ? "reset" : "continue";
   localStorage.setItem("toadBusinessName", state.playerName);
   localStorage.setItem("toadBusinessColor", state.playerColor);
   localStorage.setItem("toadBusinessMessageColor", state.messageColor);
   localStorage.setItem("toadBusinessChatFont", state.chatFont);
+  localStorage.setItem("toadBusinessJoinIntent", state.joinIntent);
   return true;
 }
 
@@ -176,7 +188,7 @@ function connectServer() {
     elements.connectionStatus.textContent = "Connected";
     showLobbyStatus("Connected to server.");
     if (state.playerName) {
-      sendToServerSocket(socket, { type: "join", ...profilePayload() });
+      sendToServerSocket(socket, { type: "join", ...joinPayload() });
     }
     // Start heartbeat to keep connection alive even when tabbed out
     startConnectionHeartbeat(socket);
@@ -668,96 +680,179 @@ const FACTIONS = {
   fox: { color: "#d2691e", name: "Fox" },
   shark: { color: "#0066cc", name: "Shark" },
 };
+const FACTION_KEYS = Object.keys(FACTIONS);
+const MAP_WIDTH = 96;
+const MAP_HEIGHT = 56;
+const WATER = 255;
+const LAND_SHAPE_X = 1.0;
+const LAND_SHAPE_Y = 0.62;
+const CONQUEST_BASE_CHANCE = 0.5;
+const CONQUEST_WEIGHT_SCALE = 0.65;
+const CONQUEST_RANDOM_VARIANCE = 0.2;
+const MIN_CONQUEST_CHANCE = 0.08;
+const MAX_CONQUEST_CHANCE = 0.92;
+const RANDOM_RESEED_RATE = 0.0009;
+const mapState = {
+  initialized: false,
+  running: false,
+  frameId: null,
+  cells: new Uint8Array(MAP_WIDTH * MAP_HEIGHT),
+  terrain: new Uint8Array(MAP_WIDTH * MAP_HEIGHT),
+  counts: new Array(FACTION_KEYS.length).fill(0),
+  offscreenCanvas: null,
+  offscreenCtx: null,
+  imageData: null,
+};
 
-let globeRotation = 0;
-let globeTerritory = {}; // factionsControl map; will be filled from market data
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
 
-function renderGlobe() {
+function targetTerritoryWeights() {
+  const source = state.market?.factionTerritories || {};
+  const defaultWeight = 1 / FACTION_KEYS.length;
+  const values = FACTION_KEYS.map((key) => Number(source[key] ?? defaultWeight));
+  const total = values.reduce((sum, value) => sum + Math.max(0.001, value), 0);
+  return values.map((value) => Math.max(0.001, value) / total);
+}
+
+function pickFaction(weights) {
+  let roll = Math.random();
+  for (let i = 0; i < weights.length; i += 1) {
+    roll -= weights[i];
+    if (roll <= 0) return i;
+  }
+  return weights.length - 1;
+}
+
+function initializeTerritoryMap() {
+  const weights = targetTerritoryWeights();
+  for (let y = 0; y < MAP_HEIGHT; y += 1) {
+    for (let x = 0; x < MAP_WIDTH; x += 1) {
+      const i = y * MAP_WIDTH + x;
+      const nx = (x / (MAP_WIDTH - 1)) * 2 - 1;
+      const ny = (y / (MAP_HEIGHT - 1)) * 2 - 1;
+      const radial = (nx * nx) / LAND_SHAPE_X + (ny * ny) / LAND_SHAPE_Y;
+      const coastNoise = (Math.sin(x * 0.18) + Math.cos(y * 0.21)) * 0.08;
+      const isWater = radial > (0.90 + coastNoise + (Math.random() * 0.06));
+      mapState.terrain[i] = isWater ? WATER : 0;
+      mapState.cells[i] = isWater ? WATER : pickFaction(weights);
+    }
+  }
+  mapState.initialized = true;
+}
+
+function stepTerritoryMap() {
+  const weights = targetTerritoryWeights();
+  const iterations = 320;
+  for (let step = 0; step < iterations; step += 1) {
+    const x = Math.floor(Math.random() * MAP_WIDTH);
+    const y = Math.floor(Math.random() * MAP_HEIGHT);
+    const i = y * MAP_WIDTH + x;
+    if (mapState.terrain[i] === WATER) continue;
+    const dx = Math.floor(Math.random() * 3) - 1;
+    const dy = Math.floor(Math.random() * 3) - 1;
+    if (dx === 0 && dy === 0) continue;
+    const nx = (x + dx + MAP_WIDTH) % MAP_WIDTH;
+    const ny = clamp(y + dy, 0, MAP_HEIGHT - 1);
+    const ni = ny * MAP_WIDTH + nx;
+    if (mapState.terrain[ni] === WATER) continue;
+    const current = mapState.cells[i];
+    const challenger = mapState.cells[ni];
+    if (challenger === WATER || current === challenger) continue;
+    const challengeBias = CONQUEST_BASE_CHANCE
+      + (weights[challenger] - weights[current]) * CONQUEST_WEIGHT_SCALE
+      + (Math.random() - 0.5) * CONQUEST_RANDOM_VARIANCE;
+    if (Math.random() < clamp(challengeBias, MIN_CONQUEST_CHANCE, MAX_CONQUEST_CHANCE)) {
+      mapState.cells[i] = challenger;
+    }
+  }
+  for (let i = 0; i < mapState.cells.length; i += 1) {
+    if (mapState.terrain[i] !== WATER && Math.random() < RANDOM_RESEED_RATE) {
+      mapState.cells[i] = pickFaction(weights);
+    }
+  }
+}
+
+function ensureOffscreenCanvas() {
+  if (mapState.offscreenCanvas) return;
+  mapState.offscreenCanvas = document.createElement("canvas");
+  mapState.offscreenCanvas.width = MAP_WIDTH;
+  mapState.offscreenCanvas.height = MAP_HEIGHT;
+  mapState.offscreenCtx = mapState.offscreenCanvas.getContext("2d");
+  mapState.imageData = mapState.offscreenCtx.createImageData(MAP_WIDTH, MAP_HEIGHT);
+}
+
+function drawTerritoryMap() {
   const canvas = elements.globeCanvas;
   if (!canvas) return;
+  ensureOffscreenCanvas();
+  mapState.counts.fill(0);
+  const pixels = mapState.imageData.data;
+  for (let i = 0; i < mapState.cells.length; i += 1) {
+    const offset = i * 4;
+    if (mapState.terrain[i] === WATER) {
+      pixels[offset] = 8;
+      pixels[offset + 1] = 14;
+      pixels[offset + 2] = 44;
+      pixels[offset + 3] = 255;
+      continue;
+    }
+    const factionIndex = mapState.cells[i];
+    const key = FACTION_KEYS[factionIndex];
+    const color = FACTIONS[key]?.color || "#444444";
+    const r = parseInt(color.slice(1, 3), 16);
+    const g = parseInt(color.slice(3, 5), 16);
+    const b = parseInt(color.slice(5, 7), 16);
+    pixels[offset] = r;
+    pixels[offset + 1] = g;
+    pixels[offset + 2] = b;
+    pixels[offset + 3] = 255;
+    mapState.counts[factionIndex] += 1;
+  }
+  mapState.offscreenCtx.putImageData(mapState.imageData, 0, 0);
   const ctx = canvas.getContext("2d");
-  const w = canvas.width, h = canvas.height;
-  const centerX = w / 2, centerY = h / 2, radius = Math.min(w, h) / 2 - 10;
-
-  // Update rotation
-  globeRotation = (globeRotation + 0.5) % 360;
-
-  // Clear and draw background
   ctx.fillStyle = "#0a0e27";
-  ctx.fillRect(0, 0, w, h);
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(mapState.offscreenCanvas, 0, 0, canvas.width, canvas.height);
+}
 
-  // Draw pseudo-3D globe
-  ctx.fillStyle = "#1a2844";
-  ctx.beginPath();
-  ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = "#4a9d6f";
-  ctx.lineWidth = 2;
-  ctx.stroke();
-
-  // Draw faction territories as arcs around the globe
-  const territories = state.market?.factionTerritories || {};
-  let angle = 0;
-  Object.entries(FACTIONS).forEach(([key, faction]) => {
-    const control = territories[key] || 0.15; // default 15% each
-    const arcSize = control * Math.PI * 2;
-    
-    ctx.fillStyle = faction.color;
-    ctx.beginPath();
-    ctx.moveTo(centerX, centerY);
-    ctx.arc(centerX, centerY, radius, angle, angle + arcSize);
-    ctx.lineTo(centerX, centerY);
-    ctx.fill();
-    
-    angle += arcSize;
-  });
-
-  // Calculate moon orbit distance based on Orbital Trust (ORB) stock price
-  let moonDist = radius + 40; // default distance
-  if (state.market?.stocks) {
-    const orbStock = state.market.stocks.find(s => s.symbol === "ORB");
-    if (orbStock && orbStock.price > 0) {
-      // Price range typically 10-100, map to moon distance 30-80 pixels
-      moonDist = radius + Math.max(30, Math.min(80, orbStock.price / 2));
-    }
+function renderGlobe() {
+  if (!mapState.initialized) {
+    initializeTerritoryMap();
   }
-
-  // Draw moon orbiting
-  const moonAngle = (globeRotation * Math.PI / 180) * 2;
-  const moonX = centerX + Math.cos(moonAngle) * moonDist;
-  const moonY = centerY + Math.sin(moonAngle) * moonDist;
-  ctx.fillStyle = "#e0e0e0";
-  ctx.beginPath();
-  ctx.arc(moonX, moonY, 8, 0, Math.PI * 2);
-  ctx.fill();
-
-  // Draw legend
-  ctx.fillStyle = "#999";
-  ctx.font = "11px Tahoma";
-  let legendY = 10;
-  Object.entries(FACTIONS).forEach(([key, faction]) => {
-    ctx.fillStyle = faction.color;
-    ctx.fillRect(w - 100, legendY, 10, 10);
-    ctx.fillStyle = "#ccc";
-    ctx.fillText(faction.name, w - 85, legendY + 9);
-    legendY += 16;
-  });
-
-  // Update info with faction and Orbital Trust info
-  const topFaction = Object.entries(territories).sort(([,a], [,b]) => b - a)[0];
-  let infoText = topFaction ? `<strong>${FACTIONS[topFaction[0]].name}</strong> controls ${(topFaction[1] * 100).toFixed(1)}% of known territories.` : "Territories uninitialized.";
-  
+  stepTerritoryMap();
+  drawTerritoryMap();
+  const totalLand = mapState.counts.reduce((sum, value) => sum + value, 0) || 1;
+  const leaderIndex = mapState.counts.indexOf(Math.max(...mapState.counts));
+  const leaderKey = FACTION_KEYS[leaderIndex];
+  const leaderPercent = (mapState.counts[leaderIndex] / totalLand) * 100;
+  let infoText = `<strong>${FACTIONS[leaderKey].name}</strong> controls ${leaderPercent.toFixed(1)}% of simulated territory.`;
   if (state.market?.stocks) {
-    const orbStock = state.market.stocks.find(s => s.symbol === "ORB");
+    const orbStock = state.market.stocks.find((item) => item.symbol === "ORB");
     if (orbStock) {
-      infoText += `<br/><small style="color: #aaa;">Moon distance tied to ORB: $${orbStock.price.toFixed(2)}</small>`;
+      infoText += `<br/><small style="color:#aaa;">ORB signal: $${Number(orbStock.price).toFixed(2)} influences frontier volatility.</small>`;
     }
   }
-  
   elements.globeInfo.innerHTML = infoText;
+  if (mapState.running) {
+    mapState.frameId = requestAnimationFrame(renderGlobe);
+  }
+}
 
-  // Animate continuously
-  requestAnimationFrame(renderGlobe);
+function startGlobeAnimation() {
+  if (mapState.running) return;
+  mapState.running = true;
+  mapState.frameId = requestAnimationFrame(renderGlobe);
+}
+
+function stopGlobeAnimation() {
+  mapState.running = false;
+  if (mapState.frameId) {
+    cancelAnimationFrame(mapState.frameId);
+    mapState.frameId = null;
+  }
 }
 
 function renderRightTab() {
@@ -768,7 +863,9 @@ function renderRightTab() {
   elements.lobbyPanel.classList.toggle("hidden", state.rightTab !== "lobby");
   elements.globePanel.classList.toggle("hidden", state.rightTab !== "globe");
   if (state.rightTab === "globe") {
-    renderGlobe();
+    startGlobeAnimation();
+  } else {
+    stopGlobeAnimation();
   }
 }
 
@@ -1047,6 +1144,10 @@ elements.playerName.value = state.playerName;
 elements.playerColor.value = safeColor(state.playerColor);
 elements.messageColor.value = safeMessageColor(state.messageColor);
 elements.chatFont.value = safeFont(state.chatFont);
+if (elements.joinIntentContinue && elements.joinIntentReset) {
+  elements.joinIntentReset.checked = state.joinIntent === "reset";
+  elements.joinIntentContinue.checked = state.joinIntent !== "reset";
+}
 if (elements.serverAddressInput) {
   elements.serverAddressInput.value = state.serverAddress;
 }

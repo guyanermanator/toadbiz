@@ -42,6 +42,16 @@ ALLOWED_CHAT_FONTS = {
     "Terminal",
     "Consolas",
 }
+LARGE_TRADE_THRESHOLD = 20
+DEFAULT_FACTION_TERRITORIES = {
+    "toad": 0.15,
+    "frog": 0.15,
+    "bug": 0.15,
+    "lizard": 0.15,
+    "bird": 0.15,
+    "fox": 0.15,
+    "shark": 0.10,
+}
 
 
 def normalized_filter_text(value: str) -> str:
@@ -92,6 +102,7 @@ class MarketEngine:
         players: dict[str, Player],
         chat_log: list[dict[str, Any]],
         news_log: list[dict[str, Any]] | None = None,
+        faction_territories: dict[str, float] | None = None,
     ) -> None:
         self.stocks = stocks
         self.players = players
@@ -103,11 +114,7 @@ class MarketEngine:
         self.last_tick = time.time()
         self.next_event_at = self.last_tick + random.uniform(18.0, 36.0)
         self._dirty = False
-        # Faction territory tracking (lightweight: just % control per faction)
-        self.faction_territories = {
-            "toad": 0.15, "frog": 0.15, "bug": 0.15,
-            "lizard": 0.15, "bird": 0.15, "fox": 0.15, "shark": 0.10,
-        }
+        self.faction_territories = self._normalized_faction_territories(faction_territories)
         self.last_faction_update = self.last_tick
         self.ensure_business_stocks()
 
@@ -135,11 +142,18 @@ class MarketEngine:
         raw_color: str = "",
         raw_message_color: str = "",
         raw_chat_font: str = "",
+        join_intent: str = "continue",
     ) -> Player:
         name = self.sanitize_name(raw_name, "player name")[:24]
         color = clean_color(raw_color)
         key = self.player_key(name)
+        reset_requested = str(join_intent or "continue").lower() == "reset"
+        if reset_requested and self.active_player_counts.get(key, 0) > 0:
+            raise ValueError("Cannot reset while player has active connections. Close other tabs/windows for this player first.")
         if key not in self.players:
+            self.players[key] = Player(name=name, color=color)
+            self._dirty = True
+        elif reset_requested:
             self.players[key] = Player(name=name, color=color)
             self._dirty = True
         player = self.players[key]
@@ -147,12 +161,12 @@ class MarketEngine:
         player.color = color
         player.message_color = clean_color(raw_message_color) if raw_message_color else color
         player.chat_font = clean_font(raw_chat_font)
-        
-        # Accrue income for offline time before marking player as active
+
         current_ts = time.time()
-        player.accrue_income(current_ts, self.total_hourly_income(player))
-        player.last_income_at = current_ts
-        
+        if not reset_requested:
+            player.accrue_income(current_ts, self.total_hourly_income(player))
+            player.last_income_at = current_ts
+
         self.active_player_counts[key] = self.active_player_counts.get(key, 0) + 1
         return player
 
@@ -317,6 +331,7 @@ class MarketEngine:
         max_buy = self.max_buyable(player, stock)
         if shares > max_buy:
             raise ValueError(f"Only {max_buy} shares are available to buy right now.")
+        trade_price = money(stock.price)
         cost = money(stock.price * shares)
         if player.cash < cost:
             raise ValueError("Not enough cash for that order.")
@@ -328,6 +343,7 @@ class MarketEngine:
         stock.last_quip = "Demand poked the price upward."
         stock.add_history_point()
         self._dirty = True
+        self.log_large_trade(player, stock, shares, side="buy", price=trade_price, total=cost, realized_pnl=0.0)
         return {"stock": stock.name, "shares": shares, "cost": cost, "side": "buy", "impactPercent": impact}
 
     def buy_max(self, player_name: str, stock_id: str) -> dict[str, Any]:
@@ -346,6 +362,7 @@ class MarketEngine:
         if shares > position.shares:
             raise ValueError(f"You only own {position.shares} shares.")
 
+        trade_price = money(stock.price)
         proceeds = money(stock.price * shares)
         realized = position.sell(shares, proceeds)
         player.cash = money(player.cash + proceeds)
@@ -355,6 +372,7 @@ class MarketEngine:
         stock.last_quip = "A sell wave made the price wobble."
         stock.add_history_point()
         self._dirty = True
+        self.log_large_trade(player, stock, shares, side="sell", price=trade_price, total=proceeds, realized_pnl=realized)
         return {
             "stock": stock.name,
             "shares": shares,
@@ -576,6 +594,56 @@ class MarketEngine:
         self.chat_log = self.chat_log[-60:]
         self._dirty = True
         return entry
+
+    def add_system_chat(self, message: str) -> dict[str, Any]:
+        entry = {
+            "ts": round(time.time(), 3),
+            "name": "Market Wire",
+            "color": "#003366",
+            "messageColor": "#1b1b1b",
+            "chatFont": "Tahoma",
+            "message": str(message)[:220],
+        }
+        self.chat_log.append(entry)
+        self.chat_log = self.chat_log[-60:]
+        self._dirty = True
+        return entry
+
+    def log_large_trade(
+        self,
+        player: Player,
+        stock: Stock,
+        shares: int,
+        side: str,
+        price: float,
+        total: float,
+        realized_pnl: float,
+    ) -> None:
+        if shares < LARGE_TRADE_THRESHOLD:
+            return
+        shares_formatted = f"{shares:,}"
+        total_value = money(total)
+        if side == "buy":
+            pnl_text = f"lost ${total_value:,.2f}"
+            title = f"Large buy: {player.name} accumulated {shares_formatted} {stock.symbol}"
+            body = f"{player.name} bought {shares_formatted} shares at ${price:,.2f}; {pnl_text} in cash."
+            self.add_system_chat(
+                f"Large BUY: {player.name} bought {shares_formatted} {stock.symbol} @ ${price:,.2f} ({pnl_text} in cash)."
+            )
+            self.add_news(title, body, "normal", stock_id=stock.id)
+            return
+        realized = money(realized_pnl)
+        pnl_word = "gained" if realized >= 0 else "lost"
+        pnl_abs = abs(realized)
+        title = f"Large sell: {player.name} unloaded {shares_formatted} {stock.symbol}"
+        body = (
+            f"{player.name} sold {shares_formatted} shares at ${price:,.2f}; "
+            f"realized {pnl_word} ${pnl_abs:,.2f} on the sale."
+        )
+        self.add_system_chat(
+            f"Large SELL: {player.name} sold {shares_formatted} {stock.symbol} @ ${price:,.2f} ({pnl_word} ${pnl_abs:,.2f})."
+        )
+        self.add_news(title, body, "normal", stock_id=stock.id)
 
     def estimate_trade_impact(self, stock: Stock, shares: int) -> float:
         volume_ratio = shares / max(stock.max_volume, 1)
@@ -862,6 +930,15 @@ class MarketEngine:
         if normalized > 1_000_000:
             raise ValueError("That order is too large.")
         return normalized
+
+    def _normalized_faction_territories(self, payload: dict[str, float] | None) -> dict[str, float]:
+        territories = dict(DEFAULT_FACTION_TERRITORIES)
+        if payload:
+            for key, value in payload.items():
+                if key in territories:
+                    territories[key] = max(0.01, float(value))
+        total = sum(territories.values()) or 1.0
+        return {key: value / total for key, value in territories.items()}
 
     def total_hourly_income(self, player: Player) -> float:
         property_income = sum(asset.hourly_income() for asset in player.real_estate)
