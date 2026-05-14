@@ -6,9 +6,10 @@ from pathlib import Path
 from typing import Any
 
 from .catalog import STOCK_CATALOG
+from .hexworld import HexWorld
 from .models import Player, Stock
 
-SAVE_VERSION = 2
+SAVE_VERSION = 3
 DEFAULT_FACTION_TERRITORIES = {
     "toad": 0.15,
     "frog": 0.15,
@@ -25,11 +26,23 @@ class GameStore:
         self.state_file = state_file
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
 
-    def load(self) -> tuple[dict[str, Stock], dict[str, Player], list[dict[str, Any]], list[dict[str, Any]], dict[str, float]]:
+    def load(
+        self,
+    ) -> tuple[
+        dict[str, Stock],
+        dict[str, Player],
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+        dict[str, float],
+        dict[str, Any] | None,
+    ]:
         saved: dict[str, Any] = {}
         if self.state_file.exists():
-            with self.state_file.open("r", encoding="utf-8") as handle:
-                saved = json.load(handle)
+            try:
+                with self.state_file.open("r", encoding="utf-8") as handle:
+                    saved = json.load(handle)
+            except (json.JSONDecodeError, ValueError):
+                saved = {}
         saved = self._migrate_payload(saved)
 
         saved_stocks = {stock["id"]: stock for stock in saved.get("stocks", []) if "id" in stock}
@@ -51,7 +64,8 @@ class GameStore:
         chat_log = list(saved.get("chatLog", []))[-60:]
         news_log = list(saved.get("newsLog", []))[-80:]
         faction_territories = self._clean_faction_territories(saved.get("factionTerritories", {}))
-        return stocks, players, chat_log, news_log, faction_territories
+        hex_world_save: dict[str, Any] | None = saved.get("hexWorld") or None
+        return stocks, players, chat_log, news_log, faction_territories, hex_world_save
 
     def save(
         self,
@@ -60,6 +74,7 @@ class GameStore:
         chat_log: list[dict[str, Any]],
         news_log: list[dict[str, Any]],
         faction_territories: dict[str, float],
+        hex_world: HexWorld | None = None,
     ) -> None:
         payload = {
             "version": SAVE_VERSION,
@@ -69,6 +84,8 @@ class GameStore:
             "newsLog": news_log[-80:],
             "factionTerritories": self._clean_faction_territories(faction_territories),
         }
+        if hex_world is not None:
+            payload["hexWorld"] = hex_world.to_save()
         temporary_path = self.state_file.with_suffix(".tmp")
         with temporary_path.open("w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2)
@@ -82,6 +99,10 @@ class GameStore:
         if version < 2:
             payload.setdefault("factionTerritories", DEFAULT_FACTION_TERRITORIES)
             version = 2
+        if version < 3:
+            # hexWorld will be generated fresh by MarketEngine when absent
+            payload.setdefault("hexWorld", None)
+            version = 3
         payload["version"] = version
         return payload
 

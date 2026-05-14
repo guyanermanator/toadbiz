@@ -583,6 +583,10 @@ input[type="color"] {
 .globe-panel canvas {
   border: 2px solid;
   border-color: var(--panel-black) var(--panel-light) var(--panel-light) var(--panel-black);
+  cursor: crosshair;
+  image-rendering: pixelated;
+  width: 100%;
+  height: auto;
 }
 
 .globe-info {
@@ -591,7 +595,56 @@ input[type="color"] {
   background: #f0f0f0;
   border: 1px solid var(--panel-dark);
   font-size: 12px;
-  text-align: center;
+  text-align: left;
+  line-height: 1.4;
+  min-height: 28px;
+}
+
+.globe-legend {
+  font-size: 11px;
+  color: #111;
+  background: #f0f0f0;
+  border: 1px solid var(--panel-dark);
+  padding: 5px 6px;
+}
+
+.globe-legend-section {
+  margin-bottom: 4px;
+}
+
+.globe-legend-section strong {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 11px;
+}
+
+.globe-legend-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.globe-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.legend-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.territory-badge {
+  display: block;
+  font-size: 11px;
+  color: #555;
+  margin-top: 2px;
 }
 
 @media (max-width: 1050px) {
