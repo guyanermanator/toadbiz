@@ -3,6 +3,7 @@ from pathlib import Path
 
 
 def bootstrap_root(start_dir: Path) -> Path:
+    """Find project root via game/map_world.py, prepend it to sys.path, and return it."""
     for candidate in (start_dir, *start_dir.parents):
         if (candidate / "game" / "map_world.py").is_file():
             root = str(candidate)
