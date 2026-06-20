@@ -87,59 +87,104 @@
       </aside>
 
       <section class="center-panel">
-        <div class="stock-workspace">
-          <section class="chart-panel win-window">
-            <div class="title-bar">
-              <span id="stockTitle">Stock</span>
-              <span id="connectionStatus">Disconnected</span>
-            </div>
-            <div class="stock-stats" id="stockStats"></div>
-            <div class="chart-wrap">
-              <canvas id="stockChart" aria-label="Selected stock history chart"></canvas>
-            </div>
-            <div class="stock-meta" id="stockMeta"></div>
-          </section>
+        <!-- Center tab bar -->
+        <div class="center-tab-bar win-window">
+          <button class="tab-button active" data-center-tab="stocks">📈 Stocks</button>
+          <button class="tab-button" data-center-tab="map">🗺 Map</button>
+          <button class="tab-button" data-center-tab="casino">🎲 Casino</button>
+        </div>
 
-          <section class="trade-panel win-window">
-            <div class="title-bar"><span>Trade Desk</span></div>
-            <div class="window-body stack">
-              <div class="cash-card">
-                <span class="muted">Cash</span>
-                <strong id="cashValue">$0.00</strong>
+        <!-- Stocks view -->
+        <div id="centerStocksView" class="center-view">
+          <div class="stock-workspace">
+            <section class="chart-panel win-window">
+              <div class="title-bar">
+                <span id="stockTitle">Stock</span>
+                <span id="connectionStatus">Disconnected</span>
               </div>
-              <div class="cash-card">
-                <span class="muted">Income</span>
-                <strong id="incomeValue">$16.50/hr</strong>
+              <div class="stock-stats" id="stockStats"></div>
+              <div class="chart-wrap">
+                <canvas id="stockChart" aria-label="Selected stock history chart"></canvas>
               </div>
-              <button id="upgradeIncomeBtn">Upgrade Income</button>
-              <label for="shareAmount">Shares</label>
-              <input id="shareAmount" type="number" min="1" step="1" value="1">
-              <div class="button-grid">
-                <button id="buyBtn">Buy</button>
-                <button id="sellBtn">Sell</button>
-                <button id="maxBuyBtn">Max Buy</button>
-                <button id="maxSellBtn">Max Sell</button>
+              <div class="stock-meta" id="stockMeta"></div>
+            </section>
+
+            <section class="trade-panel win-window">
+              <div class="title-bar"><span>Trade Desk</span></div>
+              <div class="window-body stack">
+                <div class="cash-card">
+                  <span class="muted">Cash</span>
+                  <strong id="cashValue">$0.00</strong>
+                </div>
+                <div class="cash-card">
+                  <span class="muted">Income</span>
+                  <strong id="incomeValue">$16.50/hr</strong>
+                </div>
+                <button id="upgradeIncomeBtn">Upgrade Income</button>
+                <label for="shareAmount">Shares</label>
+                <input id="shareAmount" type="number" min="1" step="1" value="1">
+                <div class="button-grid">
+                  <button id="buyBtn">Buy</button>
+                  <button id="sellBtn">Sell</button>
+                  <button id="maxBuyBtn">Max Buy</button>
+                  <button id="maxSellBtn">Max Sell</button>
+                </div>
+                <div class="owned-box">
+                  <span class="muted">Owned</span>
+                  <strong id="ownedShares">0 shares</strong>
+                </div>
+                <div id="noticeArea" class="notice-area"></div>
               </div>
-              <div class="owned-box">
-                <span class="muted">Owned</span>
-                <strong id="ownedShares">0 shares</strong>
+            </section>
+          </div>
+
+          <section class="portfolio-panel win-window">
+            <div class="title-bar">
+              <span>Portfolio</span>
+              <div class="portfolio-tabs">
+                <button class="tab-button active" data-main-tab="holdings">Holdings</button>
+                <button class="tab-button" data-main-tab="risk">Risk</button>
               </div>
-              <div id="noticeArea" class="notice-area"></div>
+            </div>
+            <div id="portfolioSummary" class="portfolio-summary"></div>
+            <div id="portfolioTable" class="portfolio-table"></div>
+          </section>
+        </div>
+
+        <!-- Map / 4X view -->
+        <div id="centerMapView" class="center-view hidden">
+          <section class="center-map-panel win-window">
+            <div class="title-bar">
+              <span>4X Strategy Map</span>
+              <div class="map-controls">
+                <button id="mapZoomOutBtn" type="button">−</button>
+                <span id="mapZoomLabel">100%</span>
+                <button id="mapZoomInBtn" type="button">+</button>
+                <button id="mapResetViewBtn" type="button">Reset</button>
+              </div>
+            </div>
+            <div class="center-map-canvas-wrap">
+              <canvas id="globeCanvas" style="display:block;"></canvas>
+              <div id="mapTooltip" class="map-tooltip hidden"></div>
+            </div>
+            <div class="center-map-footer">
+              <div id="globeInfo" class="globe-info"></div>
+              <div id="globeLegend" class="globe-legend"></div>
+              <div id="worldStatePanel" class="world-state-panel"></div>
             </div>
           </section>
         </div>
 
-        <section class="portfolio-panel win-window">
-          <div class="title-bar">
-            <span>Portfolio</span>
-            <div class="portfolio-tabs">
-              <button class="tab-button active" data-main-tab="holdings">Holdings</button>
-              <button class="tab-button" data-main-tab="risk">Risk</button>
+        <!-- Casino placeholder -->
+        <div id="centerCasinoView" class="center-view hidden">
+          <section class="casino-panel win-window">
+            <div class="title-bar"><span>🎲 Casino</span></div>
+            <div class="window-body casino-placeholder">
+              <p><strong>Coming Soon</strong></p>
+              <p class="muted">The house is still getting its chips in order. Check back later!</p>
             </div>
-          </div>
-          <div id="portfolioSummary" class="portfolio-summary"></div>
-          <div id="portfolioTable" class="portfolio-table"></div>
-        </section>
+          </section>
+        </div>
       </section>
 
       <aside class="chat-panel win-window">
@@ -149,7 +194,6 @@
             <button class="tab-button" data-right-tab="lobby">Lobby</button>
             <button class="tab-button active" data-right-tab="chat">Chat</button>
             <button class="tab-button" data-right-tab="leaderboard">Top 10</button>
-            <button class="tab-button" data-right-tab="map">Map</button>
           </div>
         </div>
         <div id="chatLog" class="chat-log"></div>
@@ -159,20 +203,6 @@
         </form>
         <div id="leaderboard" class="leaderboard hidden"></div>
         <div id="lobbyPanel" class="leaderboard hidden"></div>
-        <div id="globePanel" class="globe-panel hidden">
-          <div class="map-controls">
-            <button id="mapZoomOutBtn" type="button">-</button>
-            <span id="mapZoomLabel">100%</span>
-            <button id="mapZoomInBtn" type="button">+</button>
-            <button id="mapResetViewBtn" type="button">Reset</button>
-          </div>
-          <div class="map-canvas-wrap">
-            <canvas id="globeCanvas" style="display: block; max-width: 100%;"></canvas>
-            <div id="mapTooltip" class="map-tooltip hidden"></div>
-          </div>
-          <div id="globeInfo" class="globe-info"></div>
-          <div id="globeLegend" class="globe-legend"></div>
-        </div>
       </aside>
     </main>
 
