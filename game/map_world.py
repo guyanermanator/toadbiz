@@ -341,6 +341,16 @@ MAX_WORKERS_PER_FACTION = 8
 # Worker travels at most this many hexes per tick
 WORKER_STEP_DISTANCE = 5
 
+# Minimum hexes for housing calculation base; hexes-per-additional-city-slot
+MIN_HEXES_FOR_HOUSING = 10
+HEXES_PER_EXTRA_CITY_HOUSING = 40
+
+# Minimum hexes_owned used when updating from territory percentages
+MIN_HEXES_OWNED_FALLBACK = 10
+
+# Default faction territory share used in the initial tick before update_hex_ownership
+DEFAULT_TERRITORY_FRACTION = 0.06
+
 
 @dataclass
 class Worker:
@@ -538,7 +548,7 @@ class StrategicWorldState:
         for key, fs in self.faction_states.items():
             # We approximate using faction_starts distance — actual territory
             # percentages are tracked in MarketEngine; use a heuristic here
-            fs.hexes_owned = max(10, int(total_cells * 0.06))  # placeholder; refined below
+            fs.hexes_owned = max(MIN_HEXES_OWNED_FALLBACK, int(total_cells * DEFAULT_TERRITORY_FRACTION))
 
         # Resource collection
         for fs in self.faction_states.values():
@@ -564,10 +574,10 @@ class StrategicWorldState:
         total_cells = self.map_world.width * self.map_world.height
         for key, pct in faction_territories.items():
             if key in self.faction_states:
-                self.faction_states[key].hexes_owned = max(10, int(total_cells * pct))
+                self.faction_states[key].hexes_owned = max(MIN_HEXES_OWNED_FALLBACK, int(total_cells * pct))
         # Update housing capacity based on hexes
         for key, fs in self.faction_states.items():
-            fs.housing_capacity = CAPITAL_HOUSING + max(0, (fs.hexes_owned - 10) // 40) * CITY_HOUSING
+            fs.housing_capacity = CAPITAL_HOUSING + max(0, (fs.hexes_owned - MIN_HEXES_FOR_HOUSING) // HEXES_PER_EXTRA_CITY_HOUSING) * CITY_HOUSING
 
     # ------------------------------------------------------------------
     # Worker helpers

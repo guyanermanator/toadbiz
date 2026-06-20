@@ -982,9 +982,8 @@ function drawTerritoryBorders(ctx, visibleCells, cellMap) {
   ctx.restore();
 }
 
-// ---------------------------------------------------------------------------
-// Worker and trade route rendering
-// ---------------------------------------------------------------------------
+// Worker position grouping: pixels per bucket for overlap prevention
+const WORKER_POSITION_GROUPING_FACTOR = 3;
 
 const WORKER_ROLE_ICONS = { trade: "T", gather: "G", expand: "E", war: "W" };
 
@@ -995,7 +994,7 @@ function drawWorkers(ctx, workers) {
   const grouped = new Map();
   for (const worker of workers) {
     const center = hexToPixel(worker.q, worker.r);
-    const key = `${Math.round(center.x / 3)}:${Math.round(center.y / 3)}`;
+    const key = `${Math.round(center.x / WORKER_POSITION_GROUPING_FACTOR)}:${Math.round(center.y / WORKER_POSITION_GROUPING_FACTOR)}`;
     if (!grouped.has(key)) grouped.set(key, []);
     grouped.get(key).push({ worker, center });
   }
