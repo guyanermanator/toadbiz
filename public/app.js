@@ -718,12 +718,15 @@ const TERRAIN_COLORS = {
 const MAP_HEX_SIZE = 11;
 const MAP_HEX_W = Math.sqrt(3) * MAP_HEX_SIZE;
 const MAP_TILE_STEP_Y = MAP_HEX_SIZE * 1.5;
+const DEFAULT_MAP_CHUNK_SIZE = 24;
+const MAP_MIN_SCALE = 0.35;
+const MAP_MAX_SCALE = 2.8;
 
 const mapState = {
   running: false,
   frameId: null,
   metadata: null,
-  chunkSize: 24,
+  chunkSize: DEFAULT_MAP_CHUNK_SIZE,
   chunkCells: new Map(),
   requestedChunks: new Set(),
   hoverCell: null,
@@ -778,7 +781,7 @@ function blendColors(hex1, hex2, t) {
 function updateHexWorldFromMarket(market) {
   if (!market?.mapWorld) return;
   mapState.metadata = market.mapWorld;
-  mapState.chunkSize = Number(market.mapWorld.chunkSize || 24);
+  mapState.chunkSize = Number(market.mapWorld.chunkSize || DEFAULT_MAP_CHUNK_SIZE);
   mapState.dirty = true;
   updateMapInfo();
 }
@@ -973,7 +976,7 @@ function bindMapInteractions() {
   canvas.addEventListener("wheel", (event) => {
     event.preventDefault();
     const delta = event.deltaY > 0 ? -0.08 : 0.08;
-    mapState.scale = Math.max(0.35, Math.min(2.8, mapState.scale + delta));
+    mapState.scale = Math.max(MAP_MIN_SCALE, Math.min(MAP_MAX_SCALE, mapState.scale + delta));
     updateZoomLabel();
     mapState.dirty = true;
   }, { passive: false });
@@ -1275,12 +1278,12 @@ elements.maxBuyBtn.addEventListener("click", () => trade("buyMax"));
 elements.maxSellBtn.addEventListener("click", () => trade("sellMax"));
 elements.upgradeIncomeBtn.addEventListener("click", () => send({ type: "upgradeIncome" }));
 elements.mapZoomInBtn?.addEventListener("click", () => {
-  mapState.scale = Math.min(2.8, mapState.scale + 0.12);
+  mapState.scale = Math.min(MAP_MAX_SCALE, mapState.scale + 0.12);
   updateZoomLabel();
   mapState.dirty = true;
 });
 elements.mapZoomOutBtn?.addEventListener("click", () => {
-  mapState.scale = Math.max(0.35, mapState.scale - 0.12);
+  mapState.scale = Math.max(MAP_MIN_SCALE, mapState.scale - 0.12);
   updateZoomLabel();
   mapState.dirty = true;
 });

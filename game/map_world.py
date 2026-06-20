@@ -24,6 +24,10 @@ RESOURCE_TYPES = (
     "water",
 )
 WATER_TERRAINS = {"ocean"}
+SEED_XOR_MASK = 0xA511E9
+RESOURCE_SEED_MULTIPLIER = 1315423911
+COORD_Q_HASH = 83492791
+COORD_R_HASH = 2654435761
 
 FACTION_PROFILES: dict[str, dict[str, Any]] = {
     "toad": {"name": "Toad", "color": "#4a9d6f", "aggression": {"war": 0.30, "trade": 0.45, "expansion": 0.25}},
@@ -81,7 +85,7 @@ class StrategicMapWorld:
         self.height = max(32, int(height))
         self.seed = int(seed)
         self.chunk_size = max(8, int(chunk_size))
-        self._rng = random.Random(self.seed ^ 0xA511E9)
+        self._rng = random.Random(self.seed ^ SEED_XOR_MASK)
         self.faction_starts = self._generate_faction_starts()
 
     def _is_inside(self, q: int, r: int) -> bool:
@@ -117,7 +121,7 @@ class StrategicMapWorld:
         return "plains"
 
     def _resource_yields_for(self, q: int, r: int, terrain: str) -> list[dict[str, Any]]:
-        rng = random.Random((self.seed * 1315423911) ^ (q * 83492791) ^ (r * 2654435761))
+        rng = random.Random((self.seed * RESOURCE_SEED_MULTIPLIER) ^ (q * COORD_Q_HASH) ^ (r * COORD_R_HASH))
         resource_table = TERRAIN_RESOURCE_WEIGHTS.get(terrain, [])
         if not resource_table:
             return []
