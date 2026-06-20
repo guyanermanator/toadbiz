@@ -63,11 +63,19 @@ Player cash, online income, holdings, assets, stock prices, chat history, and ne
 - **`game/catalog.py`** — Stock definitions with realistic market factors
 - **`game/assets.py`** — Real estate, businesses, renters, CEOs, sabotage options
 - **`game/simulation.py`** — Market ticks, income calculation, trading logic, portfolio math
+- **`game/map_world.py`** — 4X map foundation models + deterministic 1000x1000 chunked map generation
 - **`game/persistence.py`** — Game state save/load to JSON
 - **`game/app_server.py`** — WebSocket server with multiplayer coordination
 - **`game/websocket.py`** — Low-level WebSocket protocol implementation
 - **`public/app.js`** — Client-side game logic and Windows 98-style UI
 - **`public/index.html`** — Connection dialog with server address input
+
+## Map Foundation (Phase 1 + 2)
+
+- New **Map** tab renders a CIV-style hex map using viewport culling + server chunk requests.
+- Logical world size is **1000x1000** hexes, but only visible chunks are requested/rendered.
+- Hover tooltips show faction ownership, terrain, resources/yields, and improvements.
+- `game/map_world.py` provides modular terrain/resource/ownership/improvement/faction-profile foundations for future simulation expansion.
 
 ## Deployment
 

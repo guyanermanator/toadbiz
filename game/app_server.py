@@ -233,6 +233,12 @@ class GameServer:
         if not client.name:
             raise ValueError("Join with a player name first.")
 
+        if message_type == "mapChunkRequest":
+            chunk_q = int(message.get("chunkQ", 0))
+            chunk_r = int(message.get("chunkR", 0))
+            await client.send({"type": "mapChunk", "chunk": self.engine.map_chunk_snapshot(chunk_q, chunk_r)})
+            return
+
         if message_type == "profile":
             player = self.engine.update_player_profile(
                 client.name,
