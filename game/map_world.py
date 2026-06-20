@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import math
 import random
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -73,6 +74,45 @@ def _noise01(q: int, r: int, seed: int, salt: int = 0) -> float:
     return n - math.floor(n)
 
 
+def _smooth_noise(fq: float, fr: float, seed: int, salt: int = 0) -> float:
+    """Hash-based pseudo-random noise that accepts float coordinates (for multi-scale use)."""
+    n = math.sin((fq + seed * 0.01 + salt * 7.17) * 0.127 + (fr + salt * 13.1) * 0.173) * 43758.5453
+    return n - math.floor(n)
+
+
+def _continent_height(q: int, r: int, seed: int, width: int, height: int) -> float:
+    """
+    Multi-scale continental height map.
+
+    Uses large-scale noise octaves to produce continent-like land masses
+    rather than scattered random hex noise.  Returns a 0-1 value where
+    higher values mean more elevated / further inland terrain.
+    """
+    # Very large scale: continental plates (~200-400 hex spans)
+    h0 = _smooth_noise(q * 0.0040, r * 0.0040, seed, 31)
+    # Medium scale: sub-continental texture / peninsulas (~60-100 hex spans)
+    h1 = _smooth_noise(q * 0.0110, r * 0.0110, seed, 32)
+    # Small scale: coastal variation (~20-35 hex spans)
+    h2 = _smooth_noise(q * 0.0270, r * 0.0270, seed, 33)
+    # Micro detail (~8-15 hex spans)
+    h3 = _smooth_noise(q * 0.0700, r * 0.0700, seed, 34)
+
+    # Continental scale dominates the land/ocean decision
+    h = h0 * 0.52 + h1 * 0.28 + h2 * 0.13 + h3 * 0.07
+
+    # Smoothstep to sharpen continent edges slightly
+    h = h * h * (3.0 - 2.0 * h)
+
+    # Fade to ocean at map edges
+    nx = q / max(1, width - 1)
+    ny = r / max(1, height - 1)
+    edge = max(abs(nx * 2.0 - 1.0), abs(ny * 2.0 - 1.0))
+    fade = max(0.0, (edge - 0.18) / 0.72)
+    h = h * (1.0 - min(1.0, fade * fade))
+
+    return h
+
+
 @dataclass(frozen=True)
 class HexCoord:
     q: int
@@ -96,23 +136,23 @@ class StrategicMapWorld:
         return 0 <= q < self.width and 0 <= r < self.height
 
     def _terrain_for(self, q: int, r: int) -> str:
-        nx = q / max(1, self.width - 1)
         ny = r / max(1, self.height - 1)
         latitude = abs(ny - 0.5) * 2.0
-        h = (_noise01(q, r, self.seed, 1) * 0.62) + (_noise01(q, r, self.seed, 2) * 0.38)
+
+        # Continental height drives the land/ocean split (gives continent clumps)
+        h = _continent_height(q, r, self.seed, self.width, self.height)
+
+        # Moisture / biome variation (medium scale)
         m = (_noise01(q, r, self.seed, 3) * 0.6) + (_noise01(q, r, self.seed, 4) * 0.4)
         river_noise = _noise01(q, r, self.seed, 5)
 
-        edge = max(abs(nx * 2 - 1), abs(ny * 2 - 1))
-        h = h * (1.0 - max(0.0, edge - 0.22) * 0.58)
-
         if h < 0.28:
             return "ocean"
-        if h < 0.34:
+        if h < 0.36:
             return "coastal"
         if latitude > 0.78 and h > 0.42:
             return "tundra"
-        if h > 0.75:
+        if h > 0.76:
             return "mountain"
         if 0.47 < h < 0.66 and 0.42 < river_noise < 0.47:
             return "river"
@@ -269,3 +309,463 @@ class StrategicMapWorld:
                 for key, value in FACTION_PROFILES.items()
             },
         }
+
+
+# ---------------------------------------------------------------------------
+# Worker / Trade-route / Faction-state models
+# ---------------------------------------------------------------------------
+
+WORKER_ROLES = ("trade", "gather", "expand", "war")
+
+# Resources collected per land hex owned per turn (very small base values)
+RESOURCE_GATHER_RATE: dict[str, float] = {
+    "grain": 0.04,
+    "gold":  0.01,
+}
+
+# Upkeep cost per worker per turn
+WORKER_UPKEEP_GRAIN = 0.08
+WORKER_UPKEEP_GOLD  = 0.02
+
+# Cost to spawn a new worker
+WORKER_SPAWN_GRAIN = 0.80
+WORKER_SPAWN_GOLD  = 0.40
+
+# Base housing units provided by the faction capital; each city improvement adds more
+CAPITAL_HOUSING = 5
+CITY_HOUSING    = 2
+
+# Maximum workers the simulation will maintain per faction
+MAX_WORKERS_PER_FACTION = 8
+
+# Worker travels at most this many hexes per tick
+WORKER_STEP_DISTANCE = 5
+
+# Minimum hexes for housing calculation base; hexes-per-additional-city-slot
+MIN_HEXES_FOR_HOUSING = 10
+HEXES_PER_EXTRA_CITY_HOUSING = 40
+
+# Minimum hexes_owned used when updating from territory percentages
+MIN_HEXES_OWNED_FALLBACK = 10
+
+# Default faction territory share used in the initial tick before update_hex_ownership
+DEFAULT_TERRITORY_FRACTION = 0.06
+
+
+@dataclass
+class Worker:
+    """A mobile unit belonging to a faction."""
+    id: str
+    faction: str
+    q: int
+    r: int
+    target_q: int
+    target_r: int
+    role: str  # one of WORKER_ROLES
+    steps_remaining: int  # turns until arrival
+    steps_total: int      # original journey length (for progress display)
+
+    def to_dict(self) -> dict[str, Any]:
+        color = FACTION_PROFILES.get(self.faction, {}).get("color", "#888888")
+        progress = 1.0 - (self.steps_remaining / max(1, self.steps_total))
+        return {
+            "id": self.id,
+            "faction": self.faction,
+            "color": color,
+            "q": self.q,
+            "r": self.r,
+            "targetQ": self.target_q,
+            "targetR": self.target_r,
+            "role": self.role,
+            "stepsRemaining": self.steps_remaining,
+            "progress": round(progress, 3),
+        }
+
+
+@dataclass
+class TradeRoute:
+    """An established trade connection between two locations."""
+    id: str
+    faction_a: str
+    faction_b: str
+    q1: int
+    r1: int
+    q2: int
+    r2: int
+    value: float   # economic value per turn
+    active: bool = True
+    age_turns: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        color_a = FACTION_PROFILES.get(self.faction_a, {}).get("color", "#888888")
+        color_b = FACTION_PROFILES.get(self.faction_b, {}).get("color", "#888888")
+        return {
+            "id": self.id,
+            "factionA": self.faction_a,
+            "factionB": self.faction_b,
+            "colorA": color_a,
+            "colorB": color_b,
+            "q1": self.q1,
+            "r1": self.r1,
+            "q2": self.q2,
+            "r2": self.r2,
+            "value": round(self.value, 2),
+            "active": self.active,
+            "ageTurns": self.age_turns,
+        }
+
+
+@dataclass
+class FactionState:
+    """Dynamic per-faction economy and workforce state."""
+    faction: str
+    grain: float = 4.0
+    gold: float  = 2.0
+    housing_capacity: int = CAPITAL_HOUSING
+    workers: list[Worker] = field(default_factory=list)
+    hexes_owned: int = 0  # updated each tick from StrategicMapWorld
+
+    @property
+    def worker_count(self) -> int:
+        return len(self.workers)
+
+    @property
+    def can_spawn_worker(self) -> bool:
+        return (
+            self.worker_count < min(self.housing_capacity, MAX_WORKERS_PER_FACTION)
+            and self.grain >= WORKER_SPAWN_GRAIN
+            and self.gold >= WORKER_SPAWN_GOLD
+        )
+
+    def collect_resources(self) -> None:
+        """Accrue base resources proportional to hexes owned."""
+        land_bonus = max(0, self.hexes_owned - 10) * 0.0005
+        self.grain += RESOURCE_GATHER_RATE["grain"] + land_bonus
+        self.gold  += RESOURCE_GATHER_RATE["gold"]  + land_bonus * 0.3
+
+    def pay_upkeep(self) -> int:
+        """Deduct worker upkeep; return number of workers disbanded due to starvation."""
+        cost_grain = self.worker_count * WORKER_UPKEEP_GRAIN
+        cost_gold  = self.worker_count * WORKER_UPKEEP_GOLD
+        disbanded = 0
+        if self.grain < cost_grain or self.gold < cost_gold:
+            # Disband the most recently created worker
+            if self.workers:
+                self.workers.pop()
+                disbanded += 1
+            cost_grain = max(0.0, cost_grain - WORKER_UPKEEP_GRAIN)
+            cost_gold  = max(0.0, cost_gold  - WORKER_UPKEEP_GOLD)
+        self.grain = max(0.0, self.grain - cost_grain)
+        self.gold  = max(0.0, self.gold  - cost_gold)
+        return disbanded
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "faction": self.faction,
+            "grain": round(self.grain, 2),
+            "gold": round(self.gold, 2),
+            "housingCapacity": self.housing_capacity,
+            "workerCount": self.worker_count,
+            "hexesOwned": self.hexes_owned,
+        }
+
+
+def _hex_distance(q1: int, r1: int, q2: int, r2: int) -> float:
+    """Approximate Euclidean distance between two offset-grid hexes."""
+    return math.sqrt((q2 - q1) ** 2 + (r2 - r1) ** 2)
+
+
+def _trade_route_value(q1: int, r1: int, q2: int, r2: int) -> float:
+    """Trade route value scales with distance — longer routes are more lucrative."""
+    dist = _hex_distance(q1, r1, q2, r2)
+    # Value formula: base + log-scale distance bonus, capped
+    value = 0.5 + math.log1p(dist / 20.0) * 1.8
+    return round(min(value, 8.0), 2)
+
+
+class StrategicWorldState:
+    """
+    Manages dynamic 4X simulation state: faction workers, trade routes, and
+    faction resource economy.  This class is driven by the MarketEngine tick
+    and references the static StrategicMapWorld for terrain / ownership data.
+    """
+
+    def __init__(self, map_world: StrategicMapWorld) -> None:
+        self.map_world = map_world
+        self._rng = random.Random(map_world.seed ^ 0xBEEF42)
+        self.turn: int = 0
+        self.trade_routes: list[TradeRoute] = []
+
+        # Initialise one FactionState per faction
+        self.faction_states: dict[str, FactionState] = {
+            key: FactionState(faction=key)
+            for key in FACTION_PROFILES
+        }
+
+        # Seed each faction with a couple of starting workers
+        self._bootstrap_workers()
+
+    # ------------------------------------------------------------------
+    # Bootstrap
+    # ------------------------------------------------------------------
+
+    def _bootstrap_workers(self) -> None:
+        for faction_key, fs in self.faction_states.items():
+            start = self.map_world.faction_starts.get(faction_key)
+            if start is None:
+                continue
+            # Spawn two workers: one trade-oriented, one expansion-oriented
+            for role in ("trade", "expand"):
+                target = self._choose_target(faction_key, role, start.q, start.r)
+                if target is None:
+                    continue
+                dist = max(1, int(_hex_distance(start.q, start.r, target[0], target[1])))
+                worker = Worker(
+                    id=f"w-{faction_key}-{uuid.uuid4().hex[:6]}",
+                    faction=faction_key,
+                    q=start.q,
+                    r=start.r,
+                    target_q=target[0],
+                    target_r=target[1],
+                    role=role,
+                    steps_remaining=dist,
+                    steps_total=dist,
+                )
+                fs.workers.append(worker)
+            # Deduct initial spawn costs
+            fs.grain = max(0.0, fs.grain - WORKER_SPAWN_GRAIN * 2)
+            fs.gold  = max(0.0, fs.gold  - WORKER_SPAWN_GOLD  * 2)
+
+    # ------------------------------------------------------------------
+    # Tick (called every ~3 s from MarketEngine)
+    # ------------------------------------------------------------------
+
+    def tick(self) -> None:
+        self.turn += 1
+
+        # Update hexes_owned from current faction territory shares
+        total_cells = self.map_world.width * self.map_world.height
+        for key, fs in self.faction_states.items():
+            # We approximate using faction_starts distance — actual territory
+            # percentages are tracked in MarketEngine; use a heuristic here
+            fs.hexes_owned = max(MIN_HEXES_OWNED_FALLBACK, int(total_cells * DEFAULT_TERRITORY_FRACTION))
+
+        # Resource collection
+        for fs in self.faction_states.values():
+            fs.collect_resources()
+            fs.pay_upkeep()
+
+        # Move workers
+        for key, fs in self.faction_states.items():
+            for worker in fs.workers:
+                self._step_worker(worker, key)
+
+        # Spawn new workers if affordable
+        if self.turn % 4 == 0:
+            for key, fs in self.faction_states.items():
+                if fs.can_spawn_worker:
+                    self._spawn_worker(key, fs)
+
+        # Age and clean up stale trade routes
+        self._age_trade_routes()
+
+    def update_hex_ownership(self, faction_territories: dict[str, float]) -> None:
+        """Refresh hexes_owned estimates from faction territory percentages."""
+        total_cells = self.map_world.width * self.map_world.height
+        for key, pct in faction_territories.items():
+            if key in self.faction_states:
+                self.faction_states[key].hexes_owned = max(MIN_HEXES_OWNED_FALLBACK, int(total_cells * pct))
+        # Update housing capacity based on hexes
+        for key, fs in self.faction_states.items():
+            fs.housing_capacity = CAPITAL_HOUSING + max(0, (fs.hexes_owned - MIN_HEXES_FOR_HOUSING) // HEXES_PER_EXTRA_CITY_HOUSING) * CITY_HOUSING
+
+    # ------------------------------------------------------------------
+    # Worker helpers
+    # ------------------------------------------------------------------
+
+    def _step_worker(self, worker: Worker, faction_key: str) -> None:
+        """Advance a worker one step toward its target."""
+        if worker.steps_remaining <= 0:
+            # Worker arrived — resolve effects then reassign
+            self._worker_arrived(worker, faction_key)
+            return
+
+        # Move fractionally toward target (just update step counter; position
+        # interpolation happens in the front end)
+        worker.steps_remaining = max(0, worker.steps_remaining - WORKER_STEP_DISTANCE)
+
+        # Linearly interpolate position toward target
+        frac = 1.0 - (worker.steps_remaining / max(1, worker.steps_total))
+        worker.q = worker.q + round((worker.target_q - worker.q) * min(frac, 1.0))
+        worker.r = worker.r + round((worker.target_r - worker.r) * min(frac, 1.0))
+
+    def _worker_arrived(self, worker: Worker, faction_key: str) -> None:
+        """Handle worker arrival at destination."""
+        if worker.role == "trade":
+            # Establish a trade route from origin to destination
+            origin_key = self._faction_at(worker.q, worker.r)
+            dest_key   = self._faction_at(worker.target_q, worker.target_r)
+            if origin_key and dest_key:
+                self._ensure_trade_route(faction_key, origin_key, dest_key,
+                                          worker.q, worker.r,
+                                          worker.target_q, worker.target_r)
+        elif worker.role in ("gather", "expand"):
+            # Collect resources bonus (handled via collect_resources already)
+            pass
+
+        # Reassign: find a new mission
+        start = self.map_world.faction_starts.get(faction_key)
+        if start is None:
+            return
+        new_role = self._rng.choice(list(WORKER_ROLES))
+        target = self._choose_target(faction_key, new_role, worker.q, worker.r)
+        if target:
+            dist = max(1, int(_hex_distance(worker.q, worker.r, target[0], target[1])))
+            worker.target_q = target[0]
+            worker.target_r = target[1]
+            worker.role = new_role
+            worker.steps_total = dist
+            worker.steps_remaining = dist
+        else:
+            # Return to capital
+            dist = max(1, int(_hex_distance(worker.q, worker.r, start.q, start.r)))
+            worker.target_q = start.q
+            worker.target_r = start.r
+            worker.role = "trade"
+            worker.steps_total = dist
+            worker.steps_remaining = dist
+
+    def _spawn_worker(self, faction_key: str, fs: FactionState) -> None:
+        """Spawn a new worker at the faction capital."""
+        start = self.map_world.faction_starts.get(faction_key)
+        if start is None:
+            return
+        role = self._rng.choice(list(WORKER_ROLES))
+        target = self._choose_target(faction_key, role, start.q, start.r)
+        if target is None:
+            return
+        dist = max(1, int(_hex_distance(start.q, start.r, target[0], target[1])))
+        worker = Worker(
+            id=f"w-{faction_key}-{uuid.uuid4().hex[:6]}",
+            faction=faction_key,
+            q=start.q,
+            r=start.r,
+            target_q=target[0],
+            target_r=target[1],
+            role=role,
+            steps_remaining=dist,
+            steps_total=dist,
+        )
+        fs.workers.append(worker)
+        fs.grain = max(0.0, fs.grain - WORKER_SPAWN_GRAIN)
+        fs.gold  = max(0.0, fs.gold  - WORKER_SPAWN_GOLD)
+
+    def _choose_target(
+        self, faction_key: str, role: str, from_q: int, from_r: int
+    ) -> tuple[int, int] | None:
+        """Pick a sensible destination hex for a worker with the given role."""
+        factions = list(FACTION_PROFILES.keys())
+        other_factions = [f for f in factions if f != faction_key]
+
+        if role == "trade" and other_factions:
+            # Head toward another faction's capital
+            target_faction = self._rng.choice(other_factions)
+            target_start = self.map_world.faction_starts.get(target_faction)
+            if target_start:
+                return target_start.q, target_start.r
+
+        if role == "expand":
+            # Head toward a random land hex somewhat far away
+            for _ in range(20):
+                dq = self._rng.randint(-150, 150)
+                dr = self._rng.randint(-150, 150)
+                tq = max(0, min(self.map_world.width - 1, from_q + dq))
+                tr = max(0, min(self.map_world.height - 1, from_r + dr))
+                terrain = self.map_world._terrain_for(tq, tr)
+                if terrain not in WATER_TERRAINS:
+                    return tq, tr
+
+        if role == "gather":
+            # Head toward a plains/forest/river hex for resources
+            for _ in range(20):
+                dq = self._rng.randint(-80, 80)
+                dr = self._rng.randint(-80, 80)
+                tq = max(0, min(self.map_world.width - 1, from_q + dq))
+                tr = max(0, min(self.map_world.height - 1, from_r + dr))
+                terrain = self.map_world._terrain_for(tq, tr)
+                if terrain in ("plains", "forest", "river"):
+                    return tq, tr
+
+        if role == "war" and other_factions:
+            # Head toward a bordering enemy faction capital
+            target_faction = self._rng.choice(other_factions)
+            target_start = self.map_world.faction_starts.get(target_faction)
+            if target_start:
+                return target_start.q, target_start.r
+
+        return None
+
+    def _faction_at(self, q: int, r: int) -> str | None:
+        """Return the faction that owns hex (q, r) according to Voronoi ownership."""
+        terrain = self.map_world._terrain_for(q, r)
+        return self.map_world._owner_for(q, r, terrain)
+
+    # ------------------------------------------------------------------
+    # Trade-route helpers
+    # ------------------------------------------------------------------
+
+    def _ensure_trade_route(
+        self,
+        worker_faction: str,
+        faction_a: str,
+        faction_b: str,
+        q1: int, r1: int,
+        q2: int, r2: int,
+    ) -> None:
+        """Create a trade route if one doesn't already exist between these endpoints."""
+        for route in self.trade_routes:
+            if (route.faction_a == faction_a and route.faction_b == faction_b) or \
+               (route.faction_a == faction_b and route.faction_b == faction_a):
+                route.active = True  # refresh
+                return
+        value = _trade_route_value(q1, r1, q2, r2)
+        route = TradeRoute(
+            id=f"rt-{uuid.uuid4().hex[:8]}",
+            faction_a=faction_a,
+            faction_b=faction_b,
+            q1=q1, r1=r1,
+            q2=q2, r2=r2,
+            value=value,
+            active=True,
+            age_turns=0,
+        )
+        self.trade_routes.append(route)
+
+    def _age_trade_routes(self) -> None:
+        """Age trade routes and remove very stale inactive ones."""
+        for route in self.trade_routes:
+            route.age_turns += 1
+        # Keep routes active for a long time; only drop routes older than 200 turns that
+        # have been explicitly deactivated
+        self.trade_routes = [r for r in self.trade_routes if r.active or r.age_turns < 200]
+        # Cap total routes
+        if len(self.trade_routes) > 40:
+            self.trade_routes = sorted(self.trade_routes, key=lambda r: r.value, reverse=True)[:40]
+
+    # ------------------------------------------------------------------
+    # Snapshot for network transmission
+    # ------------------------------------------------------------------
+
+    def snapshot(self) -> dict[str, Any]:
+        all_workers = [
+            w.to_dict()
+            for fs in self.faction_states.values()
+            for w in fs.workers
+        ]
+        return {
+            "turn": self.turn,
+            "workers": all_workers,
+            "tradeRoutes": [r.to_dict() for r in self.trade_routes if r.active],
+            "factionStates": {key: fs.to_dict() for key, fs in self.faction_states.items()},
+        }
+

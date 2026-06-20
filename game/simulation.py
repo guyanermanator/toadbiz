@@ -18,7 +18,7 @@ from .assets import (
     sabotage_template,
 )
 from .hexworld import HexWorld
-from .map_world import StrategicMapWorld
+from .map_world import StrategicMapWorld, StrategicWorldState
 from .models import (
     BusinessAsset,
     Player,
@@ -118,6 +118,7 @@ class MarketEngine:
             self.hex_world = HexWorld()
             self.hex_world.generate()
         self.map_world = StrategicMapWorld(width=1000, height=1000, seed=self.hex_world.seed)
+        self.world_state = StrategicWorldState(self.map_world)
 
         # Derive faction territories from the hex world
         self.faction_territories = self.hex_world.faction_territories()
@@ -256,6 +257,8 @@ class MarketEngine:
         if current_ts - self.last_hex_conquest >= 3.0:
             self.hex_world.conquest_tick()
             self.faction_territories = self.hex_world.faction_territories()
+            self.world_state.update_hex_ownership(self.faction_territories)
+            self.world_state.tick()
             self.last_hex_conquest = current_ts
             changed = True
 
@@ -1029,6 +1032,7 @@ class MarketEngine:
             "factionTerritories": self.faction_territories,
             "hexWorld": self.hex_world.to_snapshot(),
             "mapWorld": self.map_world.metadata_snapshot(),
+            "worldState": self.world_state.snapshot(),
         }
 
     def map_chunk_snapshot(self, chunk_q: int, chunk_r: int) -> dict[str, Any]:

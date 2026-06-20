@@ -11,6 +11,7 @@ const state = {
   sidebarTab: "stocks",
   mainTab: "holdings",
   rightTab: "chat",
+  centerTab: "stocks",
   tickerSignature: "",
   tickerRenderedAt: 0,
   pendingConfirm: null,
@@ -75,7 +76,11 @@ const elements = {
   leaderboard: document.querySelector("#leaderboard"),
   lobbyPanel: document.querySelector("#lobbyPanel"),
   connectionStatus: document.querySelector("#connectionStatus"),
-  globePanel: document.querySelector("#globePanel"),
+  // Center panel views
+  centerStocksView: document.querySelector("#centerStocksView"),
+  centerMapView: document.querySelector("#centerMapView"),
+  centerCasinoView: document.querySelector("#centerCasinoView"),
+  // Map elements (now in center panel)
   globeCanvas: document.querySelector("#globeCanvas"),
   globeInfo: document.querySelector("#globeInfo"),
   globeLegend: document.querySelector("#globeLegend"),
@@ -84,6 +89,7 @@ const elements = {
   mapZoomOutBtn: document.querySelector("#mapZoomOutBtn"),
   mapResetViewBtn: document.querySelector("#mapResetViewBtn"),
   mapZoomLabel: document.querySelector("#mapZoomLabel"),
+  worldStatePanel: document.querySelector("#worldStatePanel"),
 };
 
 function formatMoney(value) {
@@ -285,6 +291,7 @@ function renderAll() {
   renderLeaderboard();
   renderLobbyPanel();
   renderRightTab();
+  renderCenterTab();
 }
 
 function renderMarket() {
@@ -853,10 +860,17 @@ function drawMap(canvas) {
   ensureVisibleChunks(canvas);
   const visibleCells = getVisibleCells(canvas);
 
+  // Build lookup map for fast neighbor checks during border rendering
+  const cellMap = new Map();
+  for (const cell of visibleCells) {
+    cellMap.set(`${cell.q}:${cell.r}`, cell);
+  }
+
   ctx.save();
   ctx.translate(mapState.offsetX, mapState.offsetY);
   ctx.scale(mapState.scale, mapState.scale);
 
+  // --- Pass 1: Fill hexes ---
   for (const cell of visibleCells) {
     const center = hexToPixel(cell.q, cell.r);
     const terrainColor = cell.terrainColor || TERRAIN_COLORS[cell.terrain] || "#444";
@@ -866,7 +880,7 @@ function drawMap(canvas) {
     ctx.fillStyle = isHover ? "#fff8bf" : fillColor;
     ctx.fill();
     ctx.strokeStyle = isHover ? "#ffffff" : (cell.ownerColor || "#4d5a6a");
-    ctx.lineWidth = isHover ? 1.6 : 0.8;
+    ctx.lineWidth = isHover ? 1.6 : 0.5;
     ctx.stroke();
     if (cell.improvement) {
       ctx.beginPath();
@@ -876,6 +890,174 @@ function drawMap(canvas) {
     }
   }
 
+  // --- Pass 2: Territory borders ---
+  drawTerritoryBorders(ctx, visibleCells, cellMap);
+
+  // --- Pass 3: Workers and trade routes ---
+  const ws = state.market?.worldState;
+  if (ws) {
+    drawTradeRoutes(ctx, ws.tradeRoutes || []);
+    drawWorkers(ctx, ws.workers || []);
+  }
+
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------------------
+// Territory border helpers (pointy-top odd-r offset hex grid)
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the 6 neighbors of hex (q, r) in offset order:
+ * [right, upper-right, upper-left, left, lower-left, lower-right]
+ */
+function hexNeighbors(q, r) {
+  const odd = (r & 1) === 1;
+  return odd
+    ? [
+        [q + 1, r],     // right
+        [q + 1, r - 1], // upper-right
+        [q,     r - 1], // upper-left
+        [q - 1, r],     // left
+        [q,     r + 1], // lower-left
+        [q + 1, r + 1], // lower-right
+      ]
+    : [
+        [q + 1, r],     // right
+        [q,     r - 1], // upper-right
+        [q - 1, r - 1], // upper-left
+        [q - 1, r],     // left
+        [q - 1, r + 1], // lower-left
+        [q,     r + 1], // lower-right
+      ];
+}
+
+/**
+ * Draw the 6 vertex positions for a hex centred at (cx, cy).
+ * Returns array of {x, y} for vertices 0-5.
+ */
+function hexVertices(cx, cy) {
+  const verts = [];
+  for (let i = 0; i < 6; i += 1) {
+    const angle = (Math.PI / 3) * i - Math.PI / 6;
+    verts.push({ x: cx + MAP_HEX_SIZE * Math.cos(angle), y: cy + MAP_HEX_SIZE * Math.sin(angle) });
+  }
+  return verts;
+}
+
+/**
+ * Draw thick border edges wherever two adjacent hexes have different owners.
+ * Each border edge is drawn once (only from the "lower-index" side's owner colour).
+ */
+function drawTerritoryBorders(ctx, visibleCells, cellMap) {
+  ctx.save();
+  ctx.lineWidth = 2.2;
+  ctx.lineCap = "round";
+
+  for (const cell of visibleCells) {
+    if (!cell.ownerColor) continue;
+    const center = hexToPixel(cell.q, cell.r);
+    const verts = hexVertices(center.x, center.y);
+    const neighbors = hexNeighbors(cell.q, cell.r);
+
+    for (let side = 0; side < 6; side += 1) {
+      const [nq, nr] = neighbors[side];
+      const neighbor = cellMap.get(`${nq}:${nr}`);
+      const neighborOwner = neighbor?.ownerColor || null;
+
+      // Draw border edge if neighbor has a different (or absent) owner
+      if (neighborOwner !== cell.ownerColor) {
+        const v0 = verts[side];
+        const v1 = verts[(side + 1) % 6];
+        ctx.strokeStyle = cell.ownerColor;
+        ctx.globalAlpha = 0.75;
+        ctx.beginPath();
+        ctx.moveTo(v0.x, v0.y);
+        ctx.lineTo(v1.x, v1.y);
+        ctx.stroke();
+      }
+    }
+  }
+  ctx.globalAlpha = 1.0;
+  ctx.restore();
+}
+
+// Worker position grouping: pixels per bucket for overlap prevention
+const WORKER_POSITION_GROUPING_FACTOR = 3;
+
+const WORKER_ROLE_ICONS = { trade: "T", gather: "G", expand: "E", war: "W" };
+
+function drawWorkers(ctx, workers) {
+  if (!workers.length) return;
+
+  // Group workers by pixel position to avoid complete overlap
+  const grouped = new Map();
+  for (const worker of workers) {
+    const center = hexToPixel(worker.q, worker.r);
+    const key = `${Math.round(center.x / WORKER_POSITION_GROUPING_FACTOR)}:${Math.round(center.y / WORKER_POSITION_GROUPING_FACTOR)}`;
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push({ worker, center });
+  }
+
+  ctx.save();
+  ctx.font = `bold ${Math.round(MAP_HEX_SIZE * 0.55)}px Tahoma,sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  for (const group of grouped.values()) {
+    group.forEach(({ worker, center }, idx) => {
+      const offset = idx * 5;
+      const cx = center.x + offset;
+      const cy = center.y - offset;
+      const r = MAP_HEX_SIZE * 0.30;
+
+      // Faction-colored filled circle
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fillStyle = safeColor(worker.color || "#888888");
+      ctx.globalAlpha = 0.88;
+      ctx.fill();
+      ctx.globalAlpha = 1.0;
+
+      // Dark border
+      ctx.strokeStyle = "rgba(0,0,0,0.6)";
+      ctx.lineWidth = 0.9;
+      ctx.stroke();
+
+      // Role letter in white
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(WORKER_ROLE_ICONS[worker.role] || "?", cx, cy);
+    });
+  }
+  ctx.restore();
+}
+
+function drawTradeRoutes(ctx, routes) {
+  if (!routes.length) return;
+  ctx.save();
+  ctx.setLineDash([4, 6]);
+  ctx.lineCap = "round";
+
+  for (const route of routes) {
+    if (!route.active) continue;
+    const p1 = hexToPixel(route.q1, route.r1);
+    const p2 = hexToPixel(route.q2, route.r2);
+
+    // Draw a gradient-ish line blending the two faction colours
+    const gradient = ctx.createLinearGradient(p1.x, p1.y, p2.x, p2.y);
+    gradient.addColorStop(0, route.colorA || "#ffffff");
+    gradient.addColorStop(1, route.colorB || "#ffffff");
+
+    ctx.strokeStyle = gradient;
+    ctx.lineWidth = Math.max(1, Math.min(3, route.value * 0.4));
+    ctx.globalAlpha = 0.55;
+    ctx.beginPath();
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y);
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  ctx.globalAlpha = 1.0;
   ctx.restore();
 }
 
@@ -887,12 +1069,19 @@ function showMapTooltip(cell, event) {
   }
   const faction = cell.owner ? (mapState.metadata?.factions?.[cell.owner]?.name || cell.owner) : "Neutral";
   const resources = (cell.resources || []).map((entry) => `${entry.resource} ${Number(entry.yield).toFixed(2)}`).join(", ");
+  // Count workers at this hex
+  const wsWorkers = (state.market?.worldState?.workers || []).filter(
+    (w) => w.q === cell.q && w.r === cell.r,
+  );
+  const workerInfo = wsWorkers.length
+    ? `<br>Workers: ${wsWorkers.map((w) => `<span style="color:${safeColor(w.color)}">${w.role}</span>`).join(", ")}`
+    : "";
   elements.mapTooltip.innerHTML = `
     <strong>${escapeHtml(cell.id)}</strong><br>
     Terrain: ${escapeHtml(cell.terrain)}<br>
     Faction: <span style="color:${safeColor(cell.ownerColor || "#bbbbbb")}">${escapeHtml(faction)}</span><br>
     Resources: ${escapeHtml(resources || "None")}<br>
-    Improvement: ${escapeHtml(cell.improvement || "none")}
+    Improvement: ${escapeHtml(cell.improvement || "none")}${workerInfo}
   `;
   elements.mapTooltip.style.left = `${event.offsetX + 14}px`;
   elements.mapTooltip.style.top = `${event.offsetY + 14}px`;
@@ -1007,9 +1196,53 @@ function renderRightTab() {
   elements.chatForm.classList.toggle("hidden", !showChat);
   elements.leaderboard.classList.toggle("hidden", state.rightTab !== "leaderboard");
   elements.lobbyPanel.classList.toggle("hidden", state.rightTab !== "lobby");
-  elements.globePanel.classList.toggle("hidden", state.rightTab !== "map");
-  if (state.rightTab === "map") startMapView();
-  else stopMapView();
+}
+
+function renderCenterTab() {
+  const isMap = state.centerTab === "map";
+  elements.centerStocksView.classList.toggle("hidden", state.centerTab !== "stocks");
+  elements.centerMapView.classList.toggle("hidden", !isMap);
+  elements.centerCasinoView.classList.toggle("hidden", state.centerTab !== "casino");
+  if (isMap) {
+    startMapView();
+    updateWorldStatePanel();
+  } else {
+    stopMapView();
+  }
+}
+
+function updateWorldStatePanel() {
+  if (!elements.worldStatePanel) return;
+  const ws = state.market?.worldState;
+  const mapFactions = state.market?.mapWorld?.factions || {};
+  if (!ws) {
+    elements.worldStatePanel.innerHTML = "";
+    return;
+  }
+  const cards = Object.entries(ws.factionStates || {}).map(([key, fs]) => {
+    const faction = mapFactions[key] || {};
+    const color = safeColor(faction.color || "#888888");
+    const name = escapeHtml(faction.name || key);
+    const workers = fs.workerCount || 0;
+    const housing = fs.housingCapacity || 0;
+    const grain = Number(fs.grain || 0).toFixed(1);
+    const gold = Number(fs.gold || 0).toFixed(1);
+    const routes = (ws.tradeRoutes || []).filter(
+      (r) => r.factionA === key || r.factionB === key,
+    ).length;
+    return `
+      <div class="faction-state-card">
+        <strong style="color:${color}">${name}</strong>
+        <div class="faction-state-row">
+          <span title="Workers">👷 ${workers}/${housing}</span>
+          <span title="Grain">🌾 ${grain}</span>
+          <span title="Gold">💰 ${gold}</span>
+          <span title="Trade routes">🔗 ${routes}</span>
+        </div>
+      </div>
+    `;
+  });
+  elements.worldStatePanel.innerHTML = cards.join("");
 }
 
 
@@ -1117,6 +1350,16 @@ document.addEventListener("click", (event) => {
       button.classList.toggle("active", button.dataset.rightTab === state.rightTab);
     });
     renderRightTab();
+    return;
+  }
+
+  const centerTab = event.target.closest("[data-center-tab]");
+  if (centerTab) {
+    state.centerTab = centerTab.dataset.centerTab;
+    document.querySelectorAll("[data-center-tab]").forEach((button) => {
+      button.classList.toggle("active", button.dataset.centerTab === state.centerTab);
+    });
+    renderCenterTab();
     return;
   }
 
