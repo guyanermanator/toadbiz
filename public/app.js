@@ -79,6 +79,11 @@ const elements = {
   globeCanvas: document.querySelector("#globeCanvas"),
   globeInfo: document.querySelector("#globeInfo"),
   globeLegend: document.querySelector("#globeLegend"),
+  mapTooltip: document.querySelector("#mapTooltip"),
+  mapZoomInBtn: document.querySelector("#mapZoomInBtn"),
+  mapZoomOutBtn: document.querySelector("#mapZoomOutBtn"),
+  mapResetViewBtn: document.querySelector("#mapResetViewBtn"),
+  mapZoomLabel: document.querySelector("#mapZoomLabel"),
 };
 
 function formatMoney(value) {
@@ -249,6 +254,10 @@ function handleMessage(message) {
     if (message.player) state.player = message.player;
     updateHexWorldFromMarket(message.market);
     renderAll();
+    return;
+  }
+  if (message.type === "mapChunk") {
+    updateMapChunk(message.chunk);
     return;
   }
   if (message.type === "player") {
@@ -681,111 +690,74 @@ function renderLobbyPanel() {
 }
 
 // ---------------------------------------------------------------------------
-// Hex World Globe View
+// Map View (virtualized chunk rendering)
 // ---------------------------------------------------------------------------
 
-const FACTIONS = {
-  toad:   { color: "#4a9d6f", name: "Toad" },
-  frog:   { color: "#2d7a3a", name: "Frog" },
-  bug:    { color: "#8b5a2b", name: "Bug" },
-  lizard: { color: "#ff6b35", name: "Lizard" },
-  bird:   { color: "#ffd700", name: "Bird" },
-  fox:    { color: "#d2691e", name: "Fox" },
-  shark:  { color: "#0066cc", name: "Shark" },
+const TERRAIN_COLORS = {
+  ocean: "#0d2157",
+  coastal: "#2a7faa",
+  plains: "#6aaa44",
+  forest: "#2d6a2d",
+  mountain: "#7a6551",
+  desert: "#c9942a",
+  river: "#4f9dd1",
+  swamp: "#4a7535",
+  tundra: "#8ab5c4",
 };
 
-const HEX_BIOME_COLORS = [
-  "#0d2157",  // 0 ocean   – deep navy
-  "#6aaa44",  // 1 plains  – green
-  "#2d6a2d",  // 2 forest  – dark green
-  "#7a6551",  // 3 mountain– slate brown
-  "#c9942a",  // 4 desert  – sandy gold
-  "#4a7535",  // 5 swamp   – murky olive
-  "#8ab5c4",  // 6 tundra  – pale blue-grey
-  "#2a7faa",  // 7 coastal – medium blue
-];
+const MAP_HEX_SIZE = 11;
+const MAP_HEX_W = Math.sqrt(3) * MAP_HEX_SIZE;
+const MAP_TILE_STEP_Y = MAP_HEX_SIZE * 1.5;
+const DEFAULT_MAP_CHUNK_SIZE = 24;
+const MAP_MIN_SCALE = 0.35;
+const MAP_MAX_SCALE = 2.8;
+const DEFAULT_MAP_OFFSET_X = 110;
+const DEFAULT_MAP_OFFSET_Y = 110;
 
-const HEX_BIOME_NAMES = [
-  "Ocean", "Plains", "Forest", "Mountain",
-  "Desert", "Swamp", "Tundra", "Coastal",
-];
-
-const HEX_IMP_NAMES = ["", "City", "Town", "Farm", "Fort", "Mine", "Port"];
-
-// Pointy-top hex geometry
-const HEX_SIZE = 7;   // px, center-to-corner radius
-const HEX_W = Math.sqrt(3) * HEX_SIZE;    // ≈12.12 px flat width
-const HEX_H = 2 * HEX_SIZE;               // 14 px tall
-
-const hexState = {
+const mapState = {
   running: false,
   frameId: null,
-  world: null,         // last received hexWorld from market snapshot
-  territories: null,   // sparse dict of "q,r" → name
-  businesses: null,    // dict of biz_id → {q,r,biome,faction,territory}
-  hovered: null,       // {q, r} of hovered cell, or null
-  lastRender: 0,
+  metadata: null,
+  chunkSize: DEFAULT_MAP_CHUNK_SIZE,
+  chunkCells: new Map(),
+  requestedChunks: new Set(),
+  hoverCell: null,
+  offsetX: DEFAULT_MAP_OFFSET_X,
+  offsetY: DEFAULT_MAP_OFFSET_Y,
+  scale: 1,
+  dragging: false,
+  dragStartX: 0,
+  dragStartY: 0,
+  baseOffsetX: DEFAULT_MAP_OFFSET_X,
+  baseOffsetY: DEFAULT_MAP_OFFSET_Y,
   dirty: true,
 };
 
-/**
- * Decode a packed hex cell integer.
- * Bit layout (matches game/hexworld.py HexCell.pack()):
- *   bits  0-3:  biome index  (0=ocean … 7=coastal)
- *   bits  4-7:  faction index (0=neutral, 1=toad … 7=shark)
- *   bits  8-11: improvement index (0=none … 6=port)
- *   bits 12-18: population (0-127)
- */
-function decodeCell(packed) {
-  return {
-    biome:       packed & 0xF,
-    factionIdx:  (packed >> 4) & 0xF,
-    improvement: (packed >> 8) & 0xF,
-    population:  (packed >> 12) & 0x7F,
-  };
-}
-
-const FACTION_IDX_TO_KEY = [null, "toad", "frog", "bug", "lizard", "bird", "fox", "shark"];
-
-/** Convert odd-r offset hex coordinates to canvas pixel center (pointy-top). */
 function hexToPixel(q, r) {
-  const x = HEX_W * (q + 0.5 * (r & 1)) + HEX_SIZE;
-  const y = HEX_SIZE * 1.5 * r + HEX_SIZE;
+  const x = MAP_HEX_W * (q + 0.5 * (r & 1));
+  const y = MAP_TILE_STEP_Y * r;
   return { x, y };
 }
 
-/** Convert pixel position to nearest hex cell (odd-r offset, pointy-top). */
 function pixelToHex(px, py) {
-  // Approximate by column/row then correct
-  const ry = (py - HEX_SIZE) / (HEX_SIZE * 1.5);
-  const r = Math.round(ry);
-  const qRaw = (px - HEX_SIZE) / HEX_W - 0.5 * (r & 1);
-  const q = Math.round(qRaw);
+  const r = Math.round(py / MAP_TILE_STEP_Y);
+  const q = Math.round((px / MAP_HEX_W) - 0.5 * (r & 1));
   return { q, r };
 }
 
-/** Draw a pointy-top hexagon centred at (cx, cy) with given radius. */
 function hexPath(ctx, cx, cy, radius) {
   ctx.beginPath();
   for (let i = 0; i < 6; i += 1) {
-    const angle = (Math.PI / 3) * i - Math.PI / 6;  // -30° start
-    const px = cx + radius * Math.cos(angle);
-    const py = cy + radius * Math.sin(angle);
-    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    const angle = (Math.PI / 3) * i - Math.PI / 6;
+    const x = cx + radius * Math.cos(angle);
+    const y = cy + radius * Math.sin(angle);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   }
   ctx.closePath();
 }
 
-// Improvement marker radius by improvement index (matches IMP_* server constants)
-const HEX_IMP_RADIUS = [0, 3.2, 2.2, 2.0, 2.0, 2.0, 2.0];  // index 0 = none
-// Improvement marker colour by index (0=none, 1=City, 2=Town, 3=Farm, 4=Fort, 5=Mine, 6=Port)
-const HEX_IMP_COLORS = ["", "#fffde7", "#e0e0e0", "#a5d6a7", "#ef9a9a", "#ce93d8", "#80deea"];
-
-/** Blend two hex-colour strings by a 0-1 factor. Falls back to hex1 on invalid input. */
 function blendColors(hex1, hex2, t) {
-  if (!/^#[0-9a-fA-F]{6}$/.test(hex1) || !/^#[0-9a-fA-F]{6}$/.test(hex2)) {
-    return hex1;
-  }
+  if (!/^#[0-9a-fA-F]{6}$/.test(hex1) || !/^#[0-9a-fA-F]{6}$/.test(hex2)) return hex1;
   const r1 = parseInt(hex1.slice(1, 3), 16);
   const g1 = parseInt(hex1.slice(3, 5), 16);
   const b1 = parseInt(hex1.slice(5, 7), 16);
@@ -798,204 +770,234 @@ function blendColors(hex1, hex2, t) {
   return `#${r}${g}${b}`;
 }
 
-function drawHexGrid(canvas, world) {
-  if (!world) return;
-  const { width, height, cells } = world;
-  const ctx = canvas.getContext("2d");
+function updateHexWorldFromMarket(market) {
+  if (!market?.mapWorld) return;
+  mapState.metadata = market.mapWorld;
+  mapState.chunkSize = Number(market.mapWorld.chunkSize || DEFAULT_MAP_CHUNK_SIZE);
+  mapState.dirty = true;
+  updateMapInfo();
+}
 
-  // Size canvas to fit grid
-  const canvasW = Math.ceil(HEX_W * (width + 0.5) + HEX_SIZE * 2);
-  const canvasH = Math.ceil(HEX_SIZE * 1.5 * height + HEX_SIZE * 2);
-  if (canvas.width !== canvasW || canvas.height !== canvasH) {
-    canvas.width = canvasW;
-    canvas.height = canvasH;
+function updateMapChunk(chunk) {
+  if (!chunk || !Array.isArray(chunk.cells)) return;
+  const key = `${chunk.chunkQ},${chunk.chunkR}`;
+  mapState.chunkCells.set(key, chunk.cells);
+  mapState.requestedChunks.delete(key);
+  mapState.dirty = true;
+}
+
+function requestChunk(chunkQ, chunkR) {
+  if (!state.socket || state.socket.readyState !== WebSocket.OPEN) return;
+  const key = `${chunkQ},${chunkR}`;
+  if (mapState.chunkCells.has(key) || mapState.requestedChunks.has(key)) return;
+  mapState.requestedChunks.add(key);
+  send({ type: "mapChunkRequest", chunkQ, chunkR });
+}
+
+function visibleHexBounds(canvas) {
+  const left = (-mapState.offsetX) / mapState.scale - MAP_HEX_SIZE * 2;
+  const top = (-mapState.offsetY) / mapState.scale - MAP_HEX_SIZE * 2;
+  const right = (canvas.width - mapState.offsetX) / mapState.scale + MAP_HEX_SIZE * 2;
+  const bottom = (canvas.height - mapState.offsetY) / mapState.scale + MAP_HEX_SIZE * 2;
+  const a = pixelToHex(left, top);
+  const b = pixelToHex(right, bottom);
+  return {
+    minQ: Math.min(a.q, b.q) - 3,
+    maxQ: Math.max(a.q, b.q) + 3,
+    minR: Math.min(a.r, b.r) - 3,
+    maxR: Math.max(a.r, b.r) + 3,
+  };
+}
+
+function ensureVisibleChunks(canvas) {
+  if (!mapState.metadata) return;
+  const { minQ, maxQ, minR, maxR } = visibleHexBounds(canvas);
+  const minChunkQ = Math.floor(Math.max(0, minQ) / mapState.chunkSize);
+  const maxChunkQ = Math.floor(Math.max(0, maxQ) / mapState.chunkSize);
+  const minChunkR = Math.floor(Math.max(0, minR) / mapState.chunkSize);
+  const maxChunkR = Math.floor(Math.max(0, maxR) / mapState.chunkSize);
+  for (let cr = minChunkR; cr <= maxChunkR; cr += 1) {
+    for (let cq = minChunkQ; cq <= maxChunkQ; cq += 1) {
+      requestChunk(cq, cr);
+    }
+  }
+}
+
+function getVisibleCells(canvas) {
+  const bounds = visibleHexBounds(canvas);
+  const cells = [];
+  for (const chunkCells of mapState.chunkCells.values()) {
+    for (const cell of chunkCells) {
+      if (cell.q >= bounds.minQ && cell.q <= bounds.maxQ && cell.r >= bounds.minR && cell.r <= bounds.maxR) {
+        cells.push(cell);
+      }
+    }
+  }
+  return cells;
+}
+
+function drawMap(canvas) {
+  const ctx = canvas.getContext("2d");
+  const rect = canvas.getBoundingClientRect();
+  const width = Math.max(300, Math.floor(rect.width));
+  const height = Math.max(260, Math.floor(rect.height));
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
   }
 
   ctx.fillStyle = "#060d1f";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillRect(0, 0, width, height);
 
-  const territories = hexState.territories || {};
-  const bizCells = new Set();
-  if (hexState.businesses) {
-    for (const biz of Object.values(hexState.businesses)) {
-      bizCells.add(`${biz.q},${biz.r}`);
-    }
-  }
-  const hq = hexState.hovered?.q;
-  const hr = hexState.hovered?.r;
+  if (!mapState.metadata) return;
+  ensureVisibleChunks(canvas);
+  const visibleCells = getVisibleCells(canvas);
 
-  for (let idx = 0; idx < cells.length; idx += 1) {
-    const q = idx % width;
-    const r = Math.floor(idx / width);
-    const cell = decodeCell(cells[idx]);
-    const { x, y } = hexToPixel(q, r);
-    const isHovered = (q === hq && r === hr);
+  ctx.save();
+  ctx.translate(mapState.offsetX, mapState.offsetY);
+  ctx.scale(mapState.scale, mapState.scale);
 
-    const biomeColor = HEX_BIOME_COLORS[cell.biome] || "#333";
-    const factionKey = FACTION_IDX_TO_KEY[cell.factionIdx] || null;
-    const factionColor = factionKey ? FACTIONS[factionKey]?.color || null : null;
-
-    // Fill: blend biome + faction tint (30%)
-    const fillColor = factionColor && cell.biome !== 0
-      ? blendColors(biomeColor, factionColor, 0.30)
-      : biomeColor;
-
-    hexPath(ctx, x, y, HEX_SIZE - 0.5);
-    ctx.fillStyle = isHovered ? "#ffffcc" : fillColor;
+  for (const cell of visibleCells) {
+    const center = hexToPixel(cell.q, cell.r);
+    const terrainColor = cell.terrainColor || TERRAIN_COLORS[cell.terrain] || "#444";
+    const fillColor = cell.ownerColor ? blendColors(terrainColor, cell.ownerColor, 0.28) : terrainColor;
+    const isHover = mapState.hoverCell?.id === cell.id;
+    hexPath(ctx, center.x, center.y, MAP_HEX_SIZE - 0.6);
+    ctx.fillStyle = isHover ? "#fff8bf" : fillColor;
     ctx.fill();
-
-    // Border: faction color for owned land, dark for ocean
-    if (cell.biome !== 0 && factionColor) {
-      ctx.strokeStyle = isHovered ? "#ffffff" : factionColor;
-      ctx.lineWidth = isHovered ? 1.5 : 0.8;
-      ctx.stroke();
-    } else if (cell.biome !== 0) {
-      ctx.strokeStyle = "#555";
-      ctx.lineWidth = 0.5;
-      ctx.stroke();
-    }
-
-    // Improvement marker
-    if (cell.improvement > 0 && cell.biome !== 0) {
-      const impR = HEX_IMP_RADIUS[cell.improvement] || 2.0;
+    ctx.strokeStyle = isHover ? "#ffffff" : (cell.ownerColor || "#4d5a6a");
+    ctx.lineWidth = isHover ? 1.6 : 0.8;
+    ctx.stroke();
+    if (cell.improvement) {
       ctx.beginPath();
-      ctx.arc(x, y, impR, 0, Math.PI * 2);
-      ctx.fillStyle = HEX_IMP_COLORS[cell.improvement] || "#fff";
-      ctx.fill();
-    }
-
-    // Business marker (bright dot)
-    if (bizCells.has(`${q},${r}`)) {
-      ctx.beginPath();
-      ctx.arc(x, y + 2, 2.0, 0, Math.PI * 2);
-      ctx.fillStyle = "#ffee00";
+      ctx.arc(center.x, center.y, 2.2, 0, Math.PI * 2);
+      ctx.fillStyle = "#f2f2f2";
       ctx.fill();
     }
   }
+
+  ctx.restore();
 }
 
-function updateHexWorldFromMarket(market) {
-  if (!market?.hexWorld) return;
-  hexState.world = market.hexWorld;
-  hexState.territories = market.hexWorld.territories || {};
-  hexState.businesses = market.hexWorld.businesses || {};
-  hexState.dirty = true;
+function showMapTooltip(cell, event) {
+  if (!elements.mapTooltip) return;
+  if (!cell) {
+    elements.mapTooltip.classList.add("hidden");
+    return;
+  }
+  const faction = cell.owner ? (mapState.metadata?.factions?.[cell.owner]?.name || cell.owner) : "Neutral";
+  const resources = (cell.resources || []).map((entry) => `${entry.resource} ${Number(entry.yield).toFixed(2)}`).join(", ");
+  elements.mapTooltip.innerHTML = `
+    <strong>${escapeHtml(cell.id)}</strong><br>
+    Terrain: ${escapeHtml(cell.terrain)}<br>
+    Faction: <span style="color:${safeColor(cell.ownerColor || "#bbbbbb")}">${escapeHtml(faction)}</span><br>
+    Resources: ${escapeHtml(resources || "None")}<br>
+    Improvement: ${escapeHtml(cell.improvement || "none")}
+  `;
+  elements.mapTooltip.style.left = `${event.offsetX + 14}px`;
+  elements.mapTooltip.style.top = `${event.offsetY + 14}px`;
+  elements.mapTooltip.classList.remove("hidden");
 }
 
-function getHexInfoAt(q, r) {
-  const world = hexState.world;
-  if (!world) return null;
-  const { width, height, cells } = world;
-  if (q < 0 || r < 0 || q >= width || r >= height) return null;
-  const idx = r * width + q;
-  if (idx >= cells.length) return null;
-  const cell = decodeCell(cells[idx]);
-  const name = hexState.territories?.[`${q},${r}`] || null;
-  const biome = HEX_BIOME_NAMES[cell.biome] || "Unknown";
-  const faction = FACTION_IDX_TO_KEY[cell.factionIdx];
-  const imp = HEX_IMP_NAMES[cell.improvement] || "";
-  // Find businesses at this hex
-  const bizList = Object.entries(hexState.businesses || {})
-    .filter(([, b]) => b.q === q && b.r === r)
-    .map(([id]) => id);
-  return { q, r, biome, faction, imp, pop: cell.population, name, bizList };
+function pickCellAtMouse(canvas, event) {
+  const rect = canvas.getBoundingClientRect();
+  const px = (event.clientX - rect.left - mapState.offsetX) / mapState.scale;
+  const py = (event.clientY - rect.top - mapState.offsetY) / mapState.scale;
+  const { q, r } = pixelToHex(px, py);
+  const chunkQ = Math.floor(q / mapState.chunkSize);
+  const chunkR = Math.floor(r / mapState.chunkSize);
+  const key = `${chunkQ},${chunkR}`;
+  const cells = mapState.chunkCells.get(key) || [];
+  return cells.find((cell) => cell.q === q && cell.r === r) || null;
 }
 
-function buildGlobeInfo(hoveredInfo) {
-  const world = hexState.world;
+function updateMapInfo() {
+  const world = mapState.metadata;
   const ft = state.market?.factionTerritories || {};
-  const leader = Object.entries(ft).sort((a, b) => b[1] - a[1])[0];
-  const leaderName = leader ? (FACTIONS[leader[0]]?.name || leader[0]) : "Unknown";
-  const leaderPct = leader ? (leader[1] * 100).toFixed(1) : "0";
-
-  let html = `<strong>${escapeHtml(leaderName)}</strong> controls ${leaderPct}% of territory.`;
-
-  if (world) {
-    html += ` <small style="color:#666">${world.width}×${world.height} hex grid</small>`;
-  }
-
-  if (hoveredInfo) {
-    const fName = hoveredInfo.faction ? (FACTIONS[hoveredInfo.faction]?.name || hoveredInfo.faction) : "Neutral";
-    const fColor = hoveredInfo.faction ? safeColor(FACTIONS[hoveredInfo.faction]?.color) : "#888";
-    html += `<hr style="margin:4px 0;border-color:#ccc">`;
-    html += `<strong>${escapeHtml(hoveredInfo.name || hoveredInfo.biome)}</strong>`;
-    html += ` — <span style="color:${fColor}">${escapeHtml(fName)}</span>`;
-    html += `<br><small>${escapeHtml(hoveredInfo.biome)}`;
-    if (hoveredInfo.imp) html += ` &bull; ${escapeHtml(hoveredInfo.imp)}`;
-    if (hoveredInfo.pop > 0) html += ` &bull; Pop ${hoveredInfo.pop}`;
-    html += `</small>`;
-    if (hoveredInfo.bizList.length > 0) {
-      html += `<br><small style="color:#555">Businesses: ${hoveredInfo.bizList.length}</small>`;
-    }
-  }
-
-  if (elements.globeInfo) elements.globeInfo.innerHTML = html;
-
-  // Legend
-  if (elements.globeLegend) {
-    const biomeItems = HEX_BIOME_NAMES.slice(1)
-      .map((name, i) => `<span class="globe-legend-item"><span class="legend-swatch" style="background:${HEX_BIOME_COLORS[i + 1]}"></span>${escapeHtml(name)}</span>`)
-      .join("");
-    const factionItems = Object.entries(FACTIONS)
-      .map(([key, f]) => {
-        const pct = ft[key] ? (ft[key] * 100).toFixed(0) : "0";
-        return `<span class="globe-legend-item"><span class="legend-swatch" style="background:${safeColor(f.color)};border:1px solid #333"></span>${escapeHtml(f.name)} ${pct}%</span>`;
-      })
-      .join("");
-    elements.globeLegend.innerHTML = `
-      <div class="globe-legend-section"><strong>Biomes</strong><div class="globe-legend-row">${biomeItems}</div></div>
-      <div class="globe-legend-section"><strong>Factions</strong><div class="globe-legend-row">${factionItems}</div></div>
-    `;
-  }
+  if (!elements.globeInfo || !world) return;
+  const bars = Object.entries(world.factions || {})
+    .map(([key, faction]) => {
+      const pct = Math.max(0, Math.min(100, Number(ft[key] || 0) * 100));
+      return `<div style="margin:4px 0"><small>${escapeHtml(faction.name)}</small><div style="height:7px;background:#ddd;border:1px solid #999"><div style="height:100%;width:${pct.toFixed(1)}%;background:${safeColor(faction.color)}"></div></div></div>`;
+    })
+    .join("");
+  elements.globeInfo.innerHTML = `<strong>Map</strong> ${world.width}×${world.height} hexes${bars ? `<div>${bars}</div>` : ""}`;
+  const terrainItems = Object.entries(TERRAIN_COLORS)
+    .map(([name, color]) => `<span class="globe-legend-item"><span class="legend-swatch" style="background:${color}"></span>${escapeHtml(name)}</span>`)
+    .join("");
+  elements.globeLegend.innerHTML = `<div class="globe-legend-section"><strong>Terrain</strong><div class="globe-legend-row">${terrainItems}</div></div>`;
 }
 
-function globeAnimFrame() {
-  if (!hexState.running) return;
-  if (hexState.dirty) {
-    const canvas = elements.globeCanvas;
-    if (canvas) drawHexGrid(canvas, hexState.world);
-    hexState.dirty = false;
-  }
-  hexState.frameId = requestAnimationFrame(globeAnimFrame);
+function updateZoomLabel() {
+  if (!elements.mapZoomLabel) return;
+  elements.mapZoomLabel.textContent = `${Math.round(mapState.scale * 100)}%`;
 }
 
-function startGlobeAnimation() {
-  if (hexState.running) return;
-  hexState.running = true;
-  hexState.dirty = true;
-  hexState.frameId = requestAnimationFrame(globeAnimFrame);
-  // Attach hover listener once
+function bindMapInteractions() {
   const canvas = elements.globeCanvas;
-  if (canvas && !canvas._hexHoverAttached) {
-    canvas._hexHoverAttached = true;
-    canvas.addEventListener("mousemove", (event) => {
-      const rect = canvas.getBoundingClientRect();
-      const scaleX = canvas.width / rect.width;
-      const scaleY = canvas.height / rect.height;
-      const px = (event.clientX - rect.left) * scaleX;
-      const py = (event.clientY - rect.top) * scaleY;
-      const { q, r } = pixelToHex(px, py);
-      const info = getHexInfoAt(q, r);
-      if (info) {
-        hexState.hovered = { q, r };
-        hexState.dirty = true;
-        buildGlobeInfo(info);
-      }
-    });
-    canvas.addEventListener("mouseleave", () => {
-      hexState.hovered = null;
-      hexState.dirty = true;
-      buildGlobeInfo(null);
-    });
-  }
-  buildGlobeInfo(null);
+  if (!canvas || canvas._mapBound) return;
+  canvas._mapBound = true;
+
+  canvas.addEventListener("mousedown", (event) => {
+    mapState.dragging = true;
+    mapState.dragStartX = event.clientX;
+    mapState.dragStartY = event.clientY;
+    mapState.baseOffsetX = mapState.offsetX;
+    mapState.baseOffsetY = mapState.offsetY;
+  });
+  window.addEventListener("mouseup", () => {
+    mapState.dragging = false;
+  });
+  canvas.addEventListener("mousemove", (event) => {
+    if (mapState.dragging) {
+      mapState.offsetX = mapState.baseOffsetX + (event.clientX - mapState.dragStartX);
+      mapState.offsetY = mapState.baseOffsetY + (event.clientY - mapState.dragStartY);
+      mapState.dirty = true;
+      return;
+    }
+    const hover = pickCellAtMouse(canvas, event);
+    mapState.hoverCell = hover;
+    showMapTooltip(hover, event);
+    mapState.dirty = true;
+  });
+  canvas.addEventListener("mouseleave", () => {
+    mapState.hoverCell = null;
+    showMapTooltip(null, { offsetX: 0, offsetY: 0 });
+    mapState.dirty = true;
+  });
+  canvas.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    const delta = event.deltaY > 0 ? -0.08 : 0.08;
+    mapState.scale = Math.max(MAP_MIN_SCALE, Math.min(MAP_MAX_SCALE, mapState.scale + delta));
+    updateZoomLabel();
+    mapState.dirty = true;
+  }, { passive: false });
 }
 
-function stopGlobeAnimation() {
-  hexState.running = false;
-  if (hexState.frameId) {
-    cancelAnimationFrame(hexState.frameId);
-    hexState.frameId = null;
+function mapAnimFrame() {
+  if (!mapState.running) return;
+  if (mapState.dirty) {
+    drawMap(elements.globeCanvas);
+    mapState.dirty = false;
+  }
+  mapState.frameId = requestAnimationFrame(mapAnimFrame);
+}
+
+function startMapView() {
+  if (mapState.running) return;
+  bindMapInteractions();
+  mapState.running = true;
+  mapState.dirty = true;
+  updateZoomLabel();
+  updateMapInfo();
+  mapState.frameId = requestAnimationFrame(mapAnimFrame);
+}
+
+function stopMapView() {
+  mapState.running = false;
+  if (mapState.frameId) {
+    cancelAnimationFrame(mapState.frameId);
+    mapState.frameId = null;
   }
 }
 
@@ -1005,12 +1007,9 @@ function renderRightTab() {
   elements.chatForm.classList.toggle("hidden", !showChat);
   elements.leaderboard.classList.toggle("hidden", state.rightTab !== "leaderboard");
   elements.lobbyPanel.classList.toggle("hidden", state.rightTab !== "lobby");
-  elements.globePanel.classList.toggle("hidden", state.rightTab !== "globe");
-  if (state.rightTab === "globe") {
-    startGlobeAnimation();
-  } else {
-    stopGlobeAnimation();
-  }
+  elements.globePanel.classList.toggle("hidden", state.rightTab !== "map");
+  if (state.rightTab === "map") startMapView();
+  else stopMapView();
 }
 
 
@@ -1270,6 +1269,23 @@ elements.sellBtn.addEventListener("click", () => trade("sell"));
 elements.maxBuyBtn.addEventListener("click", () => trade("buyMax"));
 elements.maxSellBtn.addEventListener("click", () => trade("sellMax"));
 elements.upgradeIncomeBtn.addEventListener("click", () => send({ type: "upgradeIncome" }));
+elements.mapZoomInBtn?.addEventListener("click", () => {
+  mapState.scale = Math.min(MAP_MAX_SCALE, mapState.scale + 0.12);
+  updateZoomLabel();
+  mapState.dirty = true;
+});
+elements.mapZoomOutBtn?.addEventListener("click", () => {
+  mapState.scale = Math.max(MAP_MIN_SCALE, mapState.scale - 0.12);
+  updateZoomLabel();
+  mapState.dirty = true;
+});
+elements.mapResetViewBtn?.addEventListener("click", () => {
+  mapState.scale = 1;
+  mapState.offsetX = DEFAULT_MAP_OFFSET_X;
+  mapState.offsetY = DEFAULT_MAP_OFFSET_Y;
+  updateZoomLabel();
+  mapState.dirty = true;
+});
 
 elements.chatForm.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -1282,6 +1298,7 @@ elements.chatForm.addEventListener("submit", (event) => {
 window.addEventListener("resize", () => {
   const stock = selectedStock();
   if (stock) drawChart(stock);
+  mapState.dirty = true;
 });
 
 // Initialize UI

@@ -149,7 +149,7 @@
             <button class="tab-button" data-right-tab="lobby">Lobby</button>
             <button class="tab-button active" data-right-tab="chat">Chat</button>
             <button class="tab-button" data-right-tab="leaderboard">Top 10</button>
-            <button class="tab-button" data-right-tab="globe">Globe</button>
+            <button class="tab-button" data-right-tab="map">Map</button>
           </div>
         </div>
         <div id="chatLog" class="chat-log"></div>
@@ -160,7 +160,16 @@
         <div id="leaderboard" class="leaderboard hidden"></div>
         <div id="lobbyPanel" class="leaderboard hidden"></div>
         <div id="globePanel" class="globe-panel hidden">
-          <canvas id="globeCanvas" style="display: block; max-width: 100%;"></canvas>
+          <div class="map-controls">
+            <button id="mapZoomOutBtn" type="button">-</button>
+            <span id="mapZoomLabel">100%</span>
+            <button id="mapZoomInBtn" type="button">+</button>
+            <button id="mapResetViewBtn" type="button">Reset</button>
+          </div>
+          <div class="map-canvas-wrap">
+            <canvas id="globeCanvas" style="display: block; max-width: 100%;"></canvas>
+            <div id="mapTooltip" class="map-tooltip hidden"></div>
+          </div>
           <div id="globeInfo" class="globe-info"></div>
           <div id="globeLegend" class="globe-legend"></div>
         </div>

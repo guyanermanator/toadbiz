@@ -583,10 +583,45 @@ input[type="color"] {
 .globe-panel canvas {
   border: 2px solid;
   border-color: var(--panel-black) var(--panel-light) var(--panel-light) var(--panel-black);
-  cursor: crosshair;
+  cursor: grab;
   image-rendering: pixelated;
   width: 100%;
-  height: auto;
+  height: 420px;
+}
+
+.map-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.map-controls button {
+  min-height: 24px;
+  padding: 2px 8px;
+}
+
+.map-canvas-wrap {
+  position: relative;
+}
+
+.map-canvas-wrap canvas:active {
+  cursor: grabbing;
+}
+
+.map-tooltip {
+  position: absolute;
+  pointer-events: none;
+  min-width: 180px;
+  max-width: 240px;
+  padding: 6px 8px;
+  color: #fff;
+  background: rgba(12, 16, 26, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1.35;
+  backdrop-filter: blur(1px);
+  z-index: 2;
 }
 
 .globe-info {
