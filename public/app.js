@@ -693,16 +693,6 @@ function renderLobbyPanel() {
 // Map View (virtualized chunk rendering)
 // ---------------------------------------------------------------------------
 
-const DEFAULT_FACTIONS = {
-  toad: { color: "#4a9d6f", name: "Toad" },
-  frog: { color: "#2d7a3a", name: "Frog" },
-  bug: { color: "#8b5a2b", name: "Bug" },
-  lizard: { color: "#ff6b35", name: "Lizard" },
-  bird: { color: "#ffd700", name: "Bird" },
-  fox: { color: "#d2691e", name: "Fox" },
-  shark: { color: "#0066cc", name: "Shark" },
-};
-
 const TERRAIN_COLORS = {
   ocean: "#0d2157",
   coastal: "#2a7faa",
@@ -923,7 +913,7 @@ function updateMapInfo() {
   const world = mapState.metadata;
   const ft = state.market?.factionTerritories || {};
   if (!elements.globeInfo || !world) return;
-  const bars = Object.entries(world.factions || DEFAULT_FACTIONS)
+  const bars = Object.entries(world.factions || {})
     .map(([key, faction]) => {
       const pct = Math.max(0, Math.min(100, (Number(ft[key] || 0) * 100)));
       return `<div style="margin:4px 0"><small>${escapeHtml(faction.name)}</small><div style="height:7px;background:#ddd;border:1px solid #999"><div style="height:100%;width:${pct.toFixed(1)}%;background:${safeColor(faction.color)}"></div></div></div>`;

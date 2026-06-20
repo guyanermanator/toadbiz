@@ -28,6 +28,10 @@ SEED_XOR_MASK = 0xA511E9
 RESOURCE_SEED_MULTIPLIER = 1315423911
 COORD_Q_HASH = 83492791
 COORD_R_HASH = 2654435761
+MIN_FACTION_START_DISTANCE = 24.0
+FACTION_START_DISTANCE_DIVISOR = 8.0
+MAX_FACTION_PLACEMENT_ATTEMPTS = 20000
+MAX_FACTION_FALLBACK_ATTEMPTS = 10000
 
 FACTION_PROFILES: dict[str, dict[str, Any]] = {
     "toad": {"name": "Toad", "color": "#4a9d6f", "aggression": {"war": 0.30, "trade": 0.45, "expansion": 0.25}},
@@ -167,8 +171,8 @@ class StrategicMapWorld:
         starts: dict[str, HexCoord] = {}
         factions = list(FACTION_PROFILES)
         attempts = 0
-        min_dist = max(24.0, min(self.width, self.height) / 8.0)
-        while len(starts) < len(factions) and attempts < 20000:
+        min_dist = max(MIN_FACTION_START_DISTANCE, min(self.width, self.height) / FACTION_START_DISTANCE_DIVISOR)
+        while len(starts) < len(factions) and attempts < MAX_FACTION_PLACEMENT_ATTEMPTS:
             attempts += 1
             key = factions[len(starts)]
             q = self._rng.randrange(0, self.width)
@@ -180,7 +184,7 @@ class StrategicMapWorld:
             starts[key] = HexCoord(q=q, r=r)
         for key in factions:
             if key not in starts:
-                for _ in range(10000):
+                for _ in range(MAX_FACTION_FALLBACK_ATTEMPTS):
                     q = self._rng.randrange(0, self.width)
                     r = self._rng.randrange(0, self.height)
                     if self._valid_start(q, r):
