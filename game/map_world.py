@@ -187,11 +187,19 @@ class StrategicMapWorld:
                 for _ in range(MAX_FACTION_FALLBACK_ATTEMPTS):
                     q = self._rng.randrange(0, self.width)
                     r = self._rng.randrange(0, self.height)
-                    if self._valid_start(q, r):
+                    if self._valid_start(q, r) and all(existing.q != q or existing.r != r for existing in starts.values()):
                         starts[key] = HexCoord(q=q, r=r)
                         break
                 else:
-                    starts[key] = HexCoord(0, 0)
+                    for r in range(self.height):
+                        for q in range(self.width):
+                            if self._valid_start(q, r) and all(existing.q != q or existing.r != r for existing in starts.values()):
+                                starts[key] = HexCoord(q=q, r=r)
+                                break
+                        if key in starts:
+                            break
+                    if key not in starts:
+                        raise ValueError("Unable to place unique faction start positions on valid land tiles.")
         return starts
 
     def _owner_for(self, q: int, r: int, terrain: str) -> str | None:

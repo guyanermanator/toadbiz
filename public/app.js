@@ -711,6 +711,8 @@ const MAP_TILE_STEP_Y = MAP_HEX_SIZE * 1.5;
 const DEFAULT_MAP_CHUNK_SIZE = 24;
 const MAP_MIN_SCALE = 0.35;
 const MAP_MAX_SCALE = 2.8;
+const DEFAULT_MAP_OFFSET_X = 110;
+const DEFAULT_MAP_OFFSET_Y = 110;
 
 const mapState = {
   running: false,
@@ -720,14 +722,14 @@ const mapState = {
   chunkCells: new Map(),
   requestedChunks: new Set(),
   hoverCell: null,
-  offsetX: 110,
-  offsetY: 110,
+  offsetX: DEFAULT_MAP_OFFSET_X,
+  offsetY: DEFAULT_MAP_OFFSET_Y,
   scale: 1,
   dragging: false,
   dragStartX: 0,
   dragStartY: 0,
-  baseOffsetX: 110,
-  baseOffsetY: 110,
+  baseOffsetX: DEFAULT_MAP_OFFSET_X,
+  baseOffsetY: DEFAULT_MAP_OFFSET_Y,
   dirty: true,
 };
 
@@ -915,7 +917,7 @@ function updateMapInfo() {
   if (!elements.globeInfo || !world) return;
   const bars = Object.entries(world.factions || {})
     .map(([key, faction]) => {
-      const pct = Math.max(0, Math.min(100, (Number(ft[key] || 0) * 100)));
+      const pct = Math.max(0, Math.min(100, Number(ft[key] || 0) * 100));
       return `<div style="margin:4px 0"><small>${escapeHtml(faction.name)}</small><div style="height:7px;background:#ddd;border:1px solid #999"><div style="height:100%;width:${pct.toFixed(1)}%;background:${safeColor(faction.color)}"></div></div></div>`;
     })
     .join("");
@@ -1279,8 +1281,8 @@ elements.mapZoomOutBtn?.addEventListener("click", () => {
 });
 elements.mapResetViewBtn?.addEventListener("click", () => {
   mapState.scale = 1;
-  mapState.offsetX = 110;
-  mapState.offsetY = 110;
+  mapState.offsetX = DEFAULT_MAP_OFFSET_X;
+  mapState.offsetY = DEFAULT_MAP_OFFSET_Y;
   updateZoomLabel();
   mapState.dirty = true;
 });
